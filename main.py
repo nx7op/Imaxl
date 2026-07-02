@@ -65,10 +65,10 @@ saavn = SaavnClient()
 queues = QueueManager(max_queue_size=getattr(config, "MAX_QUEUE_SIZE", 50))
 
 DEFAULT_THUMB = "https://telegra.ph/file/default_music_thumb.jpg"
-DSP_MATRIX = {}      # Live Sound profile mapper
+DSP_MATRIX = {}      
 
 # ==============================================================================
-# AI Mood Matrix & Intelligent Heuristics (Rare Unique Feature)
+# AI Mood Matrix 
 # ==============================================================================
 AI_MOOD_DATABASE = {
     "sad": ["dil ko karayan aaya", "tu jaane na", "channa mereya", "kabira", "agar tum sath ho"],
@@ -91,14 +91,12 @@ def analyze_vibe_prompt(prompt: str) -> str:
     return random.choice(all_seeds)
 
 # ==============================================================================
-# YouTube Engine with Cookie & Format Fix (Bulletproof)
+# YouTube Engine: MULTI-LAYER FALLBACK MATRIX (The Ultimate Fix)
 # ==============================================================================
 class YoutubeEngine:
     @staticmethod
     def _extract(query: str) -> Optional[dict]:
-        # YAHAN FIX KIYA HAI: Format fallback ensures gaana kabhi fail na ho
-        ydl_opts = {
-            "format": "bestaudio[ext=m4a]/bestaudio/best/ba",
+        base_opts = {
             "quiet": True,
             "no_warnings": True,
             "default_search": "ytsearch1",
@@ -106,24 +104,38 @@ class YoutubeEngine:
             "geo_bypass": True,
         }
         
-        # Hardened check for cookies file uploaded by user
         if os.path.exists("cookies.txt"):
-            ydl_opts["cookiefile"] = "cookies.txt"
+            base_opts["cookiefile"] = "cookies.txt"
             logger.info("Secured Stream: Injecting cookies.txt authentication matrix.")
-        else:
-            logger.warning("Danger: cookies.txt missing from root directory. Using clear IP.")
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        # 🚨 YAHAN HAI MAGIC: Agar pehla format fail hua toh agla try karega!
+        formats_to_try = [
+            "bestaudio[ext=m4a]/bestaudio/best/ba",  # #1: Best Case Scenario
+            "best",                                  # #2: Normal Video+Audio (PyTgCalls audio nikal lega)
+            "ba",                                    # #3: Basic Audio
+            "worst"                                  # #4: Aakhri rasta (Kuch toh play karo)
+        ]
+
+        for fmt in formats_to_try:
+            opts = base_opts.copy()
+            opts["format"] = fmt
             try:
-                info = ydl.extract_info(query, download=False)
-                if "entries" in info:
-                    if not info["entries"]:
-                        return None
-                    info = info["entries"][0]
-                return info
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(query, download=False)
+                    if "entries" in info:
+                        if not info["entries"]:
+                            continue
+                        info = info["entries"][0]
+                    
+                    if info.get("url"):
+                        logger.info(f"✅ Success with format: {fmt}")
+                        return info
             except Exception as e:
-                logger.error(f"YouTube Engine Framework Crash: {e}")
-                return None
+                logger.warning(f"⚠️ Format fallback [{fmt}] failed, trying next... Error: {e}")
+                continue # Fail hua toh crash nahi hoga, loop agla try karega!
+        
+        logger.error("❌ YouTube Engine Framework Crash: All fallbacks failed!")
+        return None
 
     @classmethod
     async def get_track(cls, query: str) -> Optional[Track]:
@@ -154,7 +166,6 @@ def quantum_ui_card(track: Track, requested_by: str, state: ChatState, chat_id: 
     loop_status = "🧬 Engaged" if state.loop else "❌ Dormant"
     current_dsp = DSP_MATRIX.get(chat_id, "🌌 Pure Linear Phase [HQ]")
     
-    # Ensuring Duration Format isn't None
     dur = getattr(track, "duration_str", f"{track.duration}s")
     
     card = (
@@ -202,12 +213,13 @@ def get_quantum_buttons(state: ChatState) -> InlineKeyboardMarkup:
 # Engine Core Mechanics
 # ==============================================================================
 async def _execute_stream(chat_id: int, track: Track):
+    # video_flags=MediaStream.Flags.IGNORE ensures ki agar fallback video utha le, toh bhi lag na aaye
     await calls.play(
         chat_id,
         MediaStream(
             track.url,
             audio_parameters=AudioQuality.STUDIO,
-            video_flags=MediaStream.Flags.IGNORE,
+            video_flags=MediaStream.Flags.IGNORE, 
         ),
     )
 
