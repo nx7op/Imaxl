@@ -173,12 +173,25 @@ async def _advance_queue(chat_id: int):
 
 # ==============================================================================
 # PyTgCalls event: a stream finished playing
+# (Modern py-tgcalls 2.3.x consolidated call events into on_update();
+#  we detect "stream ended" by class name since exact naming can vary
+#  slightly between py-tgcalls versions/forks.)
 # ==============================================================================
 
-@calls.on_stream_end()
-async def on_stream_end(_, update):
-    chat_id = update.chat_id
-    await _advance_queue(chat_id)
+_STREAM_END_TYPE_NAMES = {"StreamEnded", "StreamEndedUpdate", "UpdatedStreamEnded"}
+
+
+@calls.on_update()
+async def on_pytgcalls_update(_, update):
+    update_name = type(update).__name__
+    chat_id = getattr(update, "chat_id", None)
+
+    if update_name in _STREAM_END_TYPE_NAMES and chat_id is not None:
+        await _advance_queue(chat_id)
+    else:
+        # Log unrecognized update types once at DEBUG so we can identify the
+        # correct class name from Railway logs if auto-advance ever misfires.
+        logger.debug("pytgcalls update: %s (chat_id=%s)", update_name, chat_id)
 
 
 # ==============================================================================
