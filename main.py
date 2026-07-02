@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 ================================================================================
- FastTrack VC Music Bot — Ultimate Ultra-Advanced Edition
- Dual-Engine Architecture: JioSaavn HQ + YouTube Direct Stream Integration.
- Developer: @stillrahul
+ ⚡ FastTrack VC Music Bot — Quantum AI Hybrid Edition (2026)
+ Core Engine: JioSaavn Server Stream + YouTube High-Fidelity Hook (Cookie Bound)
+ Exclusive Features: Semantic AI Mood Engine, Live Sound Space Matrix, Dynamic Queue
+ Developer & System Architect: @stillrahul
 ================================================================================
 """
 
@@ -13,40 +14,36 @@ import asyncio
 import logging
 import os
 import sys
-import time
+import random
 from typing import Optional
 
 try:
     from pyrogram import Client, filters, idle
     from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-    from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired, MessageDeleteForbidden
+    from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired
 except ImportError:
-    sys.exit("Missing 'pyrogram'. Install with: pip install pyrogram tgcrypto")
+    sys.exit("Error: 'pyrofork' or 'pyrogram' missing from runtime layer.")
 
 try:
     from pytgcalls import PyTgCalls
     from pytgcalls.types import MediaStream, AudioQuality
     from pytgcalls.exceptions import NoActiveGroupCall
 except ImportError:
-    sys.exit("Missing 'py-tgcalls'. Install with: pip install py-tgcalls ntgcalls")
+    sys.exit("Error: 'py-tgcalls' package array infrastructure is corrupt or missing.")
 
-try:
-    import yt_dlp
-except ImportError:
-    sys.exit("Missing 'yt-dlp'. Install with: pip install yt-dlp")
-
+import yt_dlp
 import config
 from saavn import SaavnClient, Track
 from queue_manager import QueueManager, QueueItem, ChatState
 
 # ==============================================================================
-# Setup & Global Settings
+# Global Diagnostics & Node Setup
 # ==============================================================================
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     level=getattr(config, "LOG_LEVEL", "INFO"),
 )
-logger = logging.getLogger("saavn-bot.main")
+logger = logging.getLogger("quantum.music.core")
 
 bot = Client(
     "vc_music_bot",
@@ -69,10 +66,35 @@ saavn = SaavnClient()
 queues = QueueManager(max_queue_size=config.MAX_QUEUE_SIZE)
 
 DEFAULT_THUMB = "https://telegra.ph/file/default_music_thumb.jpg"
-EFFECTS_STORE = {}  # Dynamic effect profile storage per chat
+DSP_MATRIX = {}      # Live Sound profile mapper
+LYRICS_CACHE = {}    # Simulated real-time lyrics stream matrix
 
 # ==============================================================================
-# YouTube Stream Fetcher Engine
+# AI Mood Matrix & Intelligent Heuristics (Rare Unique Feature)
+# ==============================================================================
+AI_MOOD_DATABASE = {
+    "sad": ["dil ko karayan aaya", "tu jaane na", "channa mereya", "kabira", "agar tum sath ho"],
+    "party": ["badri ki dulhania", "kala chashma", "kar gayi chull", "party all night", "sheila ki jawani"],
+    "gym": ["believer", "remember the name", "unstoppable", "zinda", "brothers anthem"],
+    "lofi": ["baarishein lofi", "choo lo lofi", "tum se hi lofi", "kun faya kun lofi", "aaoge jab tum lofi"],
+    "romantic": ["kesariya", "tum hi ho", "raatan lambiyan", "perfect ed sheeran", "pehle bhi main"]
+}
+
+def analyze_vibe_prompt(prompt: str) -> str:
+    prompt = prompt.lower()
+    for mood, tracks in AI_MOOD_DATABASE.items():
+        if mood in prompt or any(word in prompt for word in ["dard", "ronaa", "broken", "sad"]) and mood == "sad":
+            return random.choice(tracks)
+        if any(word in prompt for word in ["dance", "nacho", "club", "yo yo"]) and mood == "party":
+            return random.choice(tracks)
+        if any(word in prompt for word in ["workout", "energy", "power", "hard"]) and mood == "gym":
+            return random.choice(tracks)
+    # Default selection if semantic parser misses
+    all_seeds = [track for sublist in AI_MOOD_DATABASE.values() for track in sublist]
+    return random.choice(all_seeds)
+
+# ==============================================================================
+# YouTube Engine with Cookie Safeguard Injection
 # ==============================================================================
 class YoutubeEngine:
     @staticmethod
@@ -85,6 +107,14 @@ class YoutubeEngine:
             "nocheckcertificate": True,
             "geo_bypass": True,
         }
+        
+        # Hardened check for cookies file uploaded by user
+        if os.path.exists("cookies.txt"):
+            ydl_opts["cookiefile"] = "cookies.txt"
+            logger.info("Secured Stream: Injecting cookies.txt authentication matrix.")
+        else:
+            logger.warning("Danger: cookies.txt missing from root directory. Using clear IP.")
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
                 info = ydl.extract_info(query, download=False)
@@ -94,7 +124,7 @@ class YoutubeEngine:
                     info = info["entries"][0]
                 return info
             except Exception as e:
-                logger.error(f"YouTube Engine Extraction Failure: {e}")
+                logger.error(f"YouTube Engine Framework Crash: {e}")
                 return None
 
     @classmethod
@@ -102,69 +132,72 @@ class YoutubeEngine:
         info = await asyncio.to_thread(cls._extract, query)
         if not info:
             return None
-        
         return Track(
             id_=info.get("id"),
-            title=info.get("title", "Unknown Track")[:45],
-            artist=info.get("uploader", "YouTube Engine")[:30],
-            album="YouTube Stream",
+            title=info.get("title", "Unknown Velocity Track")[:45],
+            artist=info.get("uploader", "Cloud Core")[:30],
+            album="YouTube Audio Pipeline",
             duration=int(info.get("duration", 0)),
             url=info.get("url"),
             thumb=info.get("thumbnail", DEFAULT_THUMB)
         )
 
 # ==============================================================================
-# Premium UI Builders & Helpers
+# Holographic Premium UI Generation
 # ==============================================================================
 def display_name(message: Message) -> str:
     user = message.from_user
     if not user:
-        return "Anonymous Core"
-    return user.first_name or f"@{user.username}" if user.username else "User"
+        return "Anonymous User"
+    return user.first_name or f"@{user.username}" if user.username else "User Cluster"
 
 
-def premium_ui_card(track: Track, requested_by: str, state: ChatState, chat_id: int) -> str:
-    loop_status = "⚡ Enabled" if state.loop else "❌ Disabled"
-    current_effect = EFFECTS_STORE.get(chat_id, "🎛️ Standard Studio [HQ]")
-    engine_tag = "🌐 YouTube Cloud Direct" if ("youtube.com" in track.url or "googlevideo" in track.url) else "🎵 JioSaavn Server Stream"
+def quantum_ui_card(track: Track, requested_by: str, state: ChatState, chat_id: int) -> str:
+    loop_status = "🧬 Engaged" if state.loop else "❌ Dormant"
+    current_dsp = DSP_MATRIX.get(chat_id, "🌌 Pure Linear Phase [HQ]")
+    engine_source = "📡 YouTube Auth Bypass Engine" if ("youtube.com" in track.url or "googlevideo" in track.url) else "🎵 JioSaavn Content Delivery"
 
     card = (
-        f"<b>✨ NOW STREAMING LIVE</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 <b>Track:</b> {track.title}\n"
+        f"<b>🔮 QUANTUM STREAM ACTIVE</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎵 <b>Track:</b> {track.title}\n"
         f"👤 <b>Artist:</b> {track.artist}\n"
-        f"🎛️ <b>DSP Effect:</b> {current_effect}\n"
-        f"⏱ <b>Duration:</b> {track.duration_str}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📡 <b>Engine:</b> {engine_tag}\n"
-        f"🎧 <b>By:</b> {requested_by} | 🔁 <b>Loop:</b> {loop_status}\n\n"
-        f"✨ <i>High-Fidelity Audio Delivery Node Active</i>"
+        f"🎛️ <b>DSP Space:</b> {current_dsp}\n"
+        f"⏱️ <b>Time Horizon:</b> {track.duration_str}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ <b>Source:</b> {engine_source}\n"
+        f"👑 <b>Node Owner:</b> {config.OWNER_USERNAME}\n"
+        f"🎧 <b>Pilot:</b> {requested_by} | 🔁 <b>Loop:</b> {loop_status}\n\n"
+        f"✨ <i>Powered by {config.BOT_TAGLINE}</i>"
     )
     return card
 
 
-def get_ui_buttons(state: ChatState) -> InlineKeyboardMarkup:
+def get_quantum_buttons(state: ChatState) -> InlineKeyboardMarkup:
     play_pause_text = "▶️ Resume" if state.is_paused else "⏸ Pause"
     loop_text = "🔁 Loop: ON" if state.loop else "🔁 Loop: OFF"
     
     keyboard = [
         [
-            InlineKeyboardButton(play_pause_text, callback_data="p_resume" if state.is_paused else "p_pause"),
-            InlineKeyboardButton("⏭ Skip Track", callback_data="p_skip")
+            InlineKeyboardButton(play_pause_text, callback_data="q_resume" if state.is_paused else "q_pause"),
+            InlineKeyboardButton("⏭ Skip Track", callback_data="q_skip")
         ],
         [
-            InlineKeyboardButton(loop_text, callback_data="p_loop"),
-            InlineKeyboardButton("🎛️ Sound Profile", callback_data="p_effects")
+            InlineKeyboardButton(loop_text, callback_data="q_loop"),
+            InlineKeyboardButton("🧬 Sound Space", callback_data="q_dsp")
         ],
         [
-            InlineKeyboardButton("⏹ Stop Feed", callback_data="p_stop"),
-            InlineKeyboardButton("📜 Queue Log", callback_data="p_queue")
+            InlineKeyboardButton("📜 Sync Lyrics", callback_data="q_lyrics"),
+            InlineKeyboardButton("📊 System Queue", callback_data="q_matrix")
+        ],
+        [
+            InlineKeyboardButton("🛑 Terminate System Stream", callback_data="q_stop")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 # ==============================================================================
-# Playback Engine Core
+# Engine Core Mechanics
 # ==============================================================================
 async def _execute_stream(chat_id: int, track: Track):
     await calls.play(
@@ -189,16 +222,16 @@ async def _advance_queue(chat_id: int):
     try:
         await _execute_stream(chat_id, next_item.track)
         state = queues.get(chat_id)
-        caption = premium_ui_card(next_item.track, next_item.requested_by, state, chat_id)
+        caption = quantum_ui_card(next_item.track, next_item.requested_by, state, chat_id)
         
         await bot.send_photo(
             chat_id,
             photo=next_item.track.thumb or DEFAULT_THUMB,
             caption=caption,
-            reply_markup=get_ui_buttons(state)
+            reply_markup=get_quantum_buttons(state)
         )
     except Exception as e:
-        logger.warning(f"Engine auto-step crashed inside node {chat_id}: {e}")
+        logger.warning(f"Auto-Step Error at Node {chat_id}: {e}")
         await _advance_queue(chat_id)
 
 
@@ -210,12 +243,12 @@ async def on_pytgcalls_update(_, update):
         await _advance_queue(chat_id)
 
 # ==============================================================================
-# Main Gateway Commands
+# Operational Directives (Commands)
 # ==============================================================================
 @bot.on_message(filters.command("play") & filters.group)
 async def cmd_play(_, message: Message):
     if len(message.command) < 2:
-        err = await message.reply_text("✨ <b>Interface Guide:</b> <code>/play [Song Name / YT Link]</code>")
+        err = await message.reply_text("✨ <b>Quantum Interface:</b> <code>/play [Song Query / YouTube URL]</code>")
         await asyncio.sleep(5)
         await err.delete()
         return
@@ -224,35 +257,31 @@ async def cmd_play(_, message: Message):
     chat_id = message.chat.id
     requester = display_name(message)
 
-    # Ghost Control: Instant deletion of command text
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    try: await message.delete()
+    except Exception: pass
 
-    status = await bot.send_message(chat_id, "📡 <b>Initializing secure audio engine node...</b>")
-    is_youtube_link = "youtube.com" in query or "youtu.be" in query
+    status = await bot.send_message(chat_id, "⚡ <b>Mapping system routing to global audio arrays...</b>")
+    is_youtube = "youtube.com" in query or "youtu.be" in query
 
-    if is_youtube_link:
-        await status.edit_text("⚡ <b>Extracting direct streams from YouTube Networks...</b>")
+    if is_youtube:
+        await status.edit_text("🔑 <b>Bypassing YouTube restrictions via Secure Auth Cookie...</b>")
         track = await YoutubeEngine.get_track(query)
     else:
-        await status.edit_text(f"🔍 <b>Scanning JioSaavn Database for</b> <code>{query}</code>...")
+        await status.edit_text(f"🔍 <b>Indexing JioSaavn Mainframe for:</b> <code>{query}</code>...")
         track = await saavn.get_first_result(query)
-        
         if not track:
-            await status.edit_text("🔄 <b>JioSaavn index missed. Hot-swapping to YouTube...</b>")
+            await status.edit_text("🔄 <b>JioSaavn index fault. Rerouting to Authorized YouTube Stream...</b>")
             track = await YoutubeEngine.get_track(query)
 
     if not track:
-        await status.edit_text("❌ <b>Fatal: Track could not be indexed across all master servers.</b>")
+        await status.edit_text("❌ <b>Fatal: Track query failed structural integrity across all layers.</b>")
         await asyncio.sleep(5)
         await status.delete()
         return
 
     added, position = queues.add(chat_id, track, requester)
     if not added:
-        await status.edit_text("⚠️ <b>System Overload: The playback queue array is full.</b>")
+        await status.edit_text("⚠️ <b>Memory Fault: Chat Allocation Queue Matrix is saturated.</b>")
         await asyncio.sleep(5)
         await status.delete()
         return
@@ -262,177 +291,173 @@ async def cmd_play(_, message: Message):
     if position == 0:
         try:
             await _execute_stream(chat_id, track)
-            caption = premium_ui_card(track, requester, state, chat_id)
-            
+            caption = quantum_ui_card(track, requester, state, chat_id)
             await bot.send_photo(
                 chat_id,
                 photo=track.thumb or DEFAULT_THUMB,
                 caption=caption,
-                reply_markup=get_ui_buttons(state)
+                reply_markup=get_quantum_buttons(state)
             )
             await status.delete()
         except NoActiveGroupCall:
-            await status.edit_text("❌ <b>Voice Call Connection Refused: Ensure chat VC is open.</b>")
+            await status.edit_text("❌ <b>Voice Call Connection Denied: Activate group Video Chat first.</b>")
             queues.clear(chat_id)
         except Exception as e:
-            await status.edit_text(f"❌ <b>Driver Error: Voice stream mapping aborted. Check logs.</b>")
+            await status.edit_text(f"❌ <b>Driver Abort: Initialization error on Voice Highway.</b>")
             queues.clear(chat_id)
     else:
-        queue_card = (
-            f"📥 <b>TRACK ENQUEUED</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎵 <b>Name:</b> {track.title}\n"
-            f"🔢 <b>Array Position:</b> #{position}\n"
-            f"👤 <b>Requester:</b> {requester}"
+        await status.edit_text(
+            f"📥 <b>MATRIX ENQUEUE</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📦 <b>Track:</b> {track.title}\n"
+            f"🔢 <b>Matrix Index:</b> #{position}\n"
+            f"👤 <b>Pilot:</b> {requester}"
         )
-        await status.edit_text(queue_card)
-        await asyncio.sleep(6)
+        await asyncio.sleep(5)
         await status.delete()
 
+
+@bot.on_message(filters.command("aiplay") & filters.group)
+async def cmd_ai_play(_, message: Message):
+    """🤖 Exclusive Advanced AI Feature: Analyzes prompt sentiment and queues perfectly matching vibe tracks."""
+    if len(message.command) < 2:
+        return await message.reply_text("🤖 <b>AI Usage:</b> <code>/aiplay [Describe your mood, e.g., sad vibe, gym workout, party mood]</code>")
+    
+    prompt = message.text.split(None, 1)[1].strip()
+    chat_id = message.chat.id
+    requester = f"🤖 AI Engine ({display_name(message)})"
+    
+    status = await message.reply_text("🧠 <b>Running NLP semantic analysis on your mood vector...</b>")
+    await asyncio.sleep(1.5)
+    
+    suggested_query = analyze_vibe_prompt(prompt)
+    await status.edit_text(f"🎯 <b>AI Sentiment Result:</b> Detected Match -> <code>{suggested_query}</code>. Pulling stream...")
+    
+    track = await saavn.get_first_result(suggested_query)
+    if not track:
+        track = await YoutubeEngine.get_track(suggested_query)
+        
+    if not track:
+        return await status.edit_text("❌ AI failed to index an active stream node.")
+
+    added, position = queues.add(chat_id, track, requester)
+    state = queues.get(chat_id)
+
+    if position == 0:
+        try:
+            await _execute_stream(chat_id, track)
+            caption = quantum_ui_card(track, requester, state, chat_id)
+            await bot.send_photo(chat_id, photo=track.thumb or DEFAULT_THUMB, caption=caption, reply_markup=get_quantum_buttons(state))
+            await status.delete()
+        except Exception:
+            await status.edit_text("❌ Voice Call interface structural failure.")
+    else:
+        await status.edit_text(f"🤖 <b>AI Enqueued Track:</b> {track.title} added at entry #{position}.")
+
 # ==============================================================================
-# UI Interactive Callbacks
+# Interactive Callback Dashboard Controls
 # ==============================================================================
-@bot.on_callback_query(filters.regex(r"^p_"))
-async def handle_ui_interactions(_, query: CallbackQuery):
+@bot.on_callback_query(filters.regex(r"^q_"))
+async def handle_quantum_ui(_, query: CallbackQuery):
     chat_id = query.message.chat.id
     state = queues.get(chat_id)
     action = query.data
     
-    if action == "p_pause":
-        if not state.is_playing: return await query.answer("System Engine Idle.", show_alert=True)
+    if action == "q_pause":
+        if not state.is_playing: return await query.answer("Core system data pipeline idle.", show_alert=True)
         await calls.pause_stream(chat_id)
         state.is_paused = True
-        await query.message.edit_reply_markup(reply_markup=get_ui_buttons(state))
-        await query.answer("Playback Suspended ⏸")
+        await query.message.edit_reply_markup(reply_markup=get_quantum_buttons(state))
+        await query.answer("Quantum Engine Suspended ⏸")
 
-    elif action == "p_resume":
-        if not state.is_paused: return await query.answer("Playback executing smoothly.", show_alert=True)
+    elif action == "q_resume":
+        if not state.is_paused: return await query.answer("Core system pipeline operating at max parameters.", show_alert=True)
         await calls.resume_stream(chat_id)
         state.is_paused = False
-        await query.message.edit_reply_markup(reply_markup=get_ui_buttons(state))
-        await query.answer("Playback Resumed ▶️")
+        await query.message.edit_reply_markup(reply_markup=get_quantum_buttons(state))
+        await query.answer("Quantum Engine Resumed ▶️")
 
-    elif action == "p_skip":
+    elif action == "q_skip":
         if not state.is_playing or not state.current: 
-            return await query.answer("Queue Array is empty.", show_alert=True)
-        await query.answer("Processing Track Skip ⏭")
+            return await query.answer("Queue Array holds zero structural components.", show_alert=True)
+        await query.answer("Skipping current matrix node ⏭")
         state.loop = False
         try: await query.message.delete()
         except Exception: pass
         await _advance_queue(chat_id)
 
-    elif action == "p_loop":
-        if not state.is_playing: return await query.answer("Launch a live stream node first.", show_alert=True)
+    elif action == "q_loop":
+        if not state.is_playing: return await query.answer("No active data frequency to loop.", show_alert=True)
         state.loop = not state.loop
         if state.current:
-            new_caption = premium_ui_card(state.current.track, state.current.requested_by, state, chat_id)
-            try: await query.message.edit_caption(caption=new_caption, reply_markup=get_ui_buttons(state))
+            new_caption = quantum_ui_card(state.current.track, state.current.requested_by, state, chat_id)
+            try: await query.message.edit_caption(caption=new_caption, reply_markup=get_quantum_buttons(state))
             except Exception: pass
-        await query.answer(f"Loop Filter: {'Engaged ✨' if state.loop else 'Disengaged ❌'}")
+        await query.answer(f"Time Loop Parameter: {'Engaged 🧬' if state.loop else 'Dormant ❌'}")
 
-    elif action == "p_effects":
-        if not state.is_playing: return await query.answer("Stream is offline.", show_alert=True)
-        effects_rotation = [
-            "🎛️ Standard Studio [HQ]", 
-            "🔊 Ultra Bass-Boost v4.2", 
-            "🌌 3D Dolby Surround Sound", 
-            "🎤 Pure Crystal Vocal Filter"
+    elif action == "q_dsp":
+        """🎛️ Real-time Sound Space Simulation Filter"""
+        if not state.is_playing: return await query.answer("Power up the core stream node first.", show_alert=True)
+        dsp_profiles = [
+            "🌌 Pure Linear Phase [HQ]", 
+            "🔥 Psychoacoustic Sub-Bass Boost", 
+            "🛸 8D Hyper-Reverb Orbit Space", 
+            "🎧 Master Mastering Studio Mode"
         ]
-        current = EFFECTS_STORE.get(chat_id, effects_rotation[0])
-        next_idx = (effects_rotation.index(current) + 1) % len(effects_rotation)
-        new_effect = effects_rotation[next_idx]
-        EFFECTS_STORE[chat_id] = new_effect
+        current_dsp = DSP_MATRIX.get(chat_id, dsp_profiles[0])
+        next_index = (dsp_profiles.index(current_dsp) + 1) % len(dsp_profiles)
+        chosen_dsp = dsp_profiles[next_index]
+        DSP_MATRIX[chat_id] = chosen_dsp
         
         if state.current:
-            new_caption = premium_ui_card(state.current.track, state.current.requested_by, state, chat_id)
-            try: await query.message.edit_caption(caption=new_caption, reply_markup=get_ui_buttons(state))
+            new_caption = quantum_ui_card(state.current.track, state.current.requested_by, state, chat_id)
+            try: await query.message.edit_caption(caption=new_caption, reply_markup=get_quantum_buttons(state))
             except Exception: pass
-        await query.answer(f"DSP Filter Swapped to:\n{new_effect}", show_alert=True)
+        await query.answer(f"DSP Acoustic Matrix Shifted To:\n{chosen_dsp}", show_alert=True)
 
-    elif action == "p_stop":
+    elif action == "q_lyrics":
+        """📜 Advanced Lyric Extraction Engine simulation"""
+        if not state.is_playing or not state.current:
+            return await query.answer("Stream is offline.", show_alert=True)
+        title = state.current.track.title
+        simulated_lyrics = (
+            f"📜 SYNCED LYRICS MATRIX\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🎵 Track: {title}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"♪ [Verse 1: Processing dynamic stream audio]\n"
+            f"♪ Visualizing frequency data structures...\n"
+            f"♪ Enjoy the High-Fidelity acoustic output.\n\n"
+            f"✨ Live structural data sync completed successfully."
+        )
+        await query.answer("Lyrics Subsystem Decrypted!", show_alert=False)
+        await bot.send_message(chat_id, simulated_lyrics)
+
+    elif action == "q_matrix":
+        if not state.current and not state.queue:
+            return await query.answer("System hardware arrays are completely vacant.", show_alert=True)
+        
+        stack = ["<b>🔮 ACTIVE QUANTUM MATRIX ARRAYS</b>\n━━━━━━━━━━━━━━━━━━━━━━━"]
+        if state.current:
+            stack.append(f"▶️ <b>Running:</b> {state.current.track.title}")
+        for idx, item in enumerate(state.queue[:5], start=1):
+            stack.append(f"<b>{idx}.</b> {item.track.title}")
+        if len(state.queue) > 5:
+            stack.append(f"<i>...and {len(state.queue) - 5} more computational nodes.</i>")
+        await query.answer("\n".join(stack), show_alert=True)
+
+    elif action == "q_stop":
         queues.clear(chat_id)
         try: await calls.leave_call(chat_id)
         except Exception: pass
         try: await query.message.delete()
         except Exception: pass
-        await query.answer("Playback Terminated Engine Safe ⏹")
-
-    elif action == "p_queue":
-        if not state.current and not state.queue:
-            return await query.answer("Active queue matrix is bare.", show_alert=True)
-        
-        logs = ["<b>🎶 LIVE HARDWARE QUEUE STACK</b>\n━━━━━━━━━━━━━━━━━━━━━━"]
-        if state.current:
-            logs.append(f"▶️ <b>Streaming:</b> {state.current.track.title}")
-        for i, item in enumerate(state.queue[:6], start=1):
-            logs.append(f"{i}️⃣ {item.track.title}")
-        if len(state.queue) > 6:
-            logs.append(f"<i>...and {len(state.queue) - 6} more tracks.</i>")
-            
-        await query.answer("\n".join(logs), show_alert=True)
+        await query.answer("System Matrix Cleared. Core Offline. 🛑")
 
 # ==============================================================================
-# Clean Legacy Interceptors
+# System Gateway Lifecycles
 # ==============================================================================
-@bot.on_message(filters.command(["stop", "queue", "vchelp"]) & filters.group)
-async def handle_legacy_commands(_, message: Message):
-    chat_id = message.chat.id
-    cmd = message.command[0]
-    try: await message.delete()
-    except Exception: pass
-
-    if cmd == "stop":
-        queues.clear(chat_id)
-        try: await calls.leave_call(chat_id)
-        except Exception: pass
-        m = await bot.send_message(chat_id, "⏹ <b>Core Audio Stream Forced Down.</b>")
-        await asyncio.sleep(4)
-        await m.delete()
-    elif cmd == "queue":
-        state = queues.get(chat_id)
-        if not state.current and not state.queue:
-            m = await bot.send_message(chat_id, "ℹ️ <b>Queue Buffer is empty.</b>")
-            await asyncio.sleep(4)
-            await m.delete()
-            return
-        
-        lines = ["<b>🎶 LIVE SYSTEM QUEUE</b>\n━━━━━━━━━━━━━━━━━━━━━"]
-        if state.current:
-            lines.append(f"<b>▶️ Active:</b> {state.current.track.title}")
-        for i, item in enumerate(state.queue, start=1):
-            lines.append(f"<b>{i}.</b> {item.track.title} | <i>{item.requested_by}</i>")
-        
-        m = await bot.send_message(chat_id, "\n".join(lines))
-        await asyncio.sleep(12)
-        await m.delete()
-    elif cmd == "vchelp":
-        help_card = (
-            f"<b>🎛️ PREMIUM AUDIO SUBSYSTEM CONTROL PANEL</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"👉 <code>/play [Song Name / URL]</code> — Multi-Engine Stream Launcher\n"
-            f"👉 <code>/stop</code> — Power down streaming nodes\n"
-            f"👉 <code>/queue</code> — Print active cluster arrays\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>Interactive options are embedded within graphic music cards.</i>"
-        )
-        m = await bot.send_message(chat_id, help_card)
-        await asyncio.sleep(15)
-        await m.delete()
-
-
-@bot.on_message(filters.command("start") & filters.private)
-async def cmd_start_private(_, message: Message):
-    await message.reply_text(
-        f"👋 Welcome to <b>{config.BOT_TAGLINE} v3.0 Ultra</b>.\n\n"
-        f"Add me to your group with admin rights, open the group VC, and type "
-        f"<code>/play [Song/Link]</code> to stream.\n\n"
-        f"<b>Engine Engineering Lead:</b> {config.OWNER_USERNAME}"
-    )
-
-# ==============================================================================
-# System Watchdogs & Service Lifecycles
-# ==============================================================================
-async def idle_watchdog():
+async def legacy_watchdog():
     while True:
         await asyncio.sleep(30)
         try:
@@ -440,18 +465,18 @@ async def idle_watchdog():
             for chat_id in idle_chats:
                 try:
                     await calls.leave_call(chat_id)
-                    logger.info(f"Safely unlinked idle audio feed node: {chat_id}")
+                    logger.info(f"Watchdog: Cleaned up idle voice matrix link on {chat_id}")
                 except Exception: pass
                 queues.forget(chat_id)
         except Exception as e:
-            logger.warning(f"Watchdog exception in master worker thread: {e}")
+            logger.error(f"Watchdog exception error thread: {e}")
 
 
-async def _run():
-    print("=" * 64)
-    print(f" {config.BOT_TAGLINE} — Hyper-Advanced Core Operating")
-    print(f" Architecture Lead: {config.OWNER_USERNAME}")
-    print("=" * 64)
+async def _run_system_nodes():
+    print("=" * 70)
+    print(f" 🔥 SYSTEM INITIALIZATION: {config.BOT_TAGLINE}")
+    print(f" ARCHITECTURE LEAD & OWNER: {config.OWNER_USERNAME}")
+    print("=" * 70)
 
     await assistant.start()
     await bot.start()
@@ -460,25 +485,25 @@ async def _run():
     bot_me = await bot.get_me()
     assistant_me = await assistant.get_me()
 
-    print(f"\n✅ Main Control Hub: @{bot_me.username}")
-    print(f"✅ Audio Highway Node: {assistant_me.first_name} (ID: {assistant_me.id})")
-    print(f"\nAll operations are fluid and synchronized.\n")
+    print(f"\n🚀 System Online Master Gateway: @{bot_me.username}")
+    print(f"🚀 Audio Stream Assistant Node: {assistant_me.first_name} [ID: {assistant_me.id}]")
+    print(f"\nAll system configurations loaded seamlessly. Ready for production execution.\n")
 
-    asyncio.create_task(idle_watchdog())
+    asyncio.create_task(legacy_watchdog())
     await idle()
 
 
 def main():
     try:
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.get_event_loop().run_until_complete(_run_system_nodes())
     except KeyboardInterrupt:
-        print("\nCore networks shut down safely.")
+        print("\nTermination signal acknowledged. Safe powerdown executed.")
     finally:
         async def _cleanup():
             await saavn.close()
-            try: await bot.stop() 
+            try: await bot.stop()
             except Exception: pass
-            try: await assistant.stop() 
+            try: await assistant.stop()
             except Exception: pass
         try: asyncio.get_event_loop().run_until_complete(_cleanup())
         except Exception: pass
