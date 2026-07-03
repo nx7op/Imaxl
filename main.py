@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-FastTrack VC Music — Masterpiece Edition
-YouTube HQ Audio + Video • Smart Auto-DJ • Real LoFi
-Ultra Fast • Zero Spam • Clean UI
+FastTrack VC Music Bot — Premium Edition
 @stillrahul
 """
 
@@ -73,15 +71,14 @@ saavn = SaavnClient()
 queues = QueueManager(max_queue_size=getattr(config, "MAX_QUEUE_SIZE", 50))
 
 DEFAULT_THUMB = "https://telegra.ph/file/default_music_thumb.jpg"
-DSP_MATRIX: dict[int, str] = {}
 LOFI_CHATS: set[int] = set()
 NOW_MSG: dict[int, int] = {}
 AUTODJ: dict[int, bool] = {}
 PLAY_HISTORY: dict[int, list[str]] = {}
-AI_HTTP = httpx.AsyncClient(timeout=10)
+AI_HTTP = httpx.AsyncClient(timeout=12)
 
 # ==============================================================================
-# Utils
+# Helpers
 # ==============================================================================
 def is_sudo(msg: Message) -> bool:
     u = msg.from_user
@@ -95,7 +92,7 @@ def is_sudo(msg: Message) -> bool:
 def uname(msg: Message) -> str:
     u = msg.from_user
     if not u:
-        return "Unknown"
+        return "Someone"
     return u.first_name or (f"@{u.username}" if u.username else "User")
 
 
@@ -122,82 +119,95 @@ async def safe_del(msg):
 
 
 # ==============================================================================
-# Smart AI Song Suggest — Always different, genre-aware
+# AI Song Suggest — Smart, Never Repeats
 # ==============================================================================
-async def ai_suggest(history: list[str]) -> Optional[str]:
-    """
-    Uses external API to get intelligent song suggestions.
-    Never repeats. Learns from user history.
-    """
-    recent = ", ".join(history[-5:]) if history else "no songs played yet"
+async def ai_suggest(history: list[str], count: int = 1) -> list[str]:
+    """Get AI song suggestions based on play history."""
+    recent = ", ".join(history[-8:]) if history else "nothing yet"
+    already = ", ".join(history[-15:]) if history else "none"
 
     prompt = (
-        f"You are a music expert. The user recently played: {recent}. "
-        f"Suggest ONE Hindi/Bollywood song name that the user would love. "
-        f"Pick something different from what they already played. "
-        f"Reply with ONLY the song name and artist, nothing else. "
-        f"Example: Kesariya Arijit Singh"
+        f"You are a Bollywood and Hindi music expert DJ. "
+        f"The listener recently enjoyed: {recent}. "
+        f"Already played (DO NOT repeat these): {already}. "
+        f"Suggest {count} different Hindi/Bollywood/Punjabi songs they would love. "
+        f"Give ONLY song names with artist, one per line. "
+        f"No numbering, no extra text. Example:\n"
+        f"Kesariya Arijit Singh\n"
+        f"Excuses AP Dhillon"
     )
 
     try:
-        url = f"https://gemini.adi7ya.workers.dev/?q={prompt}"
-        resp = await AI_HTTP.get(url)
+        resp = await AI_HTTP.get(
+            f"https://gemini.adi7ya.workers.dev/?q={prompt}"
+        )
         if resp.status_code == 200:
-            data = resp.text.strip()
-            # Clean response — just song name
-            data = data.replace('"', '').replace("'", "").strip()
-            if len(data) > 3 and len(data) < 80:
-                logger.info(f"🧠 AI suggest: {data}")
-                return data
+            text = resp.text.strip()
+            lines = [
+                l.strip().strip('"').strip("'").strip()
+                for l in text.split("\n")
+                if l.strip() and len(l.strip()) > 3 and len(l.strip()) < 80
+            ]
+            # Remove any that match history
+            fresh = [l for l in lines if l.lower() not in
+                     [h.lower() for h in history]]
+            if fresh:
+                logger.info(f"🧠 AI: {fresh[:count]}")
+                return fresh[:count]
+            if lines:
+                return lines[:count]
     except Exception as e:
-        logger.warning(f"AI suggest error: {e}")
+        logger.warning(f"AI error: {e}")
 
-    # Fallback — smart random
-    fallback = [
-        "tum hi ho arijit", "kesariya", "raataan lambiyan",
-        "channa mereya", "pehla nasha", "kabira encore",
-        "agar tum sath ho", "tujhe dekha to ye jaana sanam",
-        "hawayein arijit", "kun faya kun", "dil se re",
-        "chaiyya chaiyya", "tum se hi", "kal ho naa ho",
-        "ae dil hai mushkil", "ilahi", "safar jab harry met sejal",
+    # Fallback pool
+    pool = [
+        "Kesariya Arijit Singh", "Raataan Lambiyan", "Tum Hi Ho",
+        "Channa Mereya", "Pehla Nasha", "Dil Se Re AR Rahman",
+        "Tujhe Dekha To Ye Jaana Sanam", "Kal Ho Naa Ho",
+        "Ae Dil Hai Mushkil", "Ilahi Yeh Jawaani Hai Deewani",
+        "Chaiyya Chaiyya", "Kun Faya Kun", "Kabira",
+        "Agar Tum Saath Ho", "Hawayein Arijit", "Phir Le Aaya Dil",
+        "Excuses AP Dhillon", "Brown Munde", "295 Sidhu",
+        "Lover Diljit", "Shape of You", "Blinding Lights",
     ]
-    # Remove already played
-    available = [s for s in fallback if s not in history]
+    available = [s for s in pool if s.lower() not in
+                 [h.lower() for h in history]]
     if not available:
-        available = fallback
-    return random.choice(available)
+        available = pool
+    random.shuffle(available)
+    return available[:count]
 
 
 # ==============================================================================
-# Mood Quick Pick (no API needed — instant)
+# Mood Instant Pick
 # ==============================================================================
 MOODS = {
-    "sad": ["tu jaane na", "channa mereya", "kabira", "agar tum sath ho", "tujhe bhula diya", "phir le aaya dil"],
-    "party": ["kala chashma", "kar gayi chull", "badri ki dulhania", "lungi dance", "abhi toh party", "london thumakda"],
-    "gym": ["believer", "unstoppable sia", "till i collapse", "remember the name", "zinda", "sultan theme"],
-    "lofi": ["hindi lofi chill", "tum se hi lofi", "kun faya kun lofi", "baarishein lofi", "aaoge jab tum lofi"],
-    "romantic": ["kesariya", "tum hi ho", "raataan lambiyan", "pehle bhi main", "hawayein", "tera ban jaunga"],
-    "devotional": ["hanuman chalisa", "gayatri mantra", "achyutam keshavam", "om namah shivaya"],
-    "90s": ["pehla nasha", "tujhe dekha to", "kuch kuch hota hai", "ye kaali kaali aankhen", "dil to pagal hai"],
-    "english": ["shape of you", "blinding lights", "perfect", "someone you loved", "night changes"],
-    "punjabi": ["excuses", "no love", "295", "brown munde", "lover", "tauba tauba"],
+    "sad": ["Tu Jaane Na", "Channa Mereya", "Kabira", "Agar Tum Sath Ho", "Tujhe Bhula Diya", "Phir Le Aaya Dil"],
+    "party": ["Kala Chashma", "Kar Gayi Chull", "Badri Ki Dulhania", "Lungi Dance", "Abhi Toh Party", "London Thumakda"],
+    "gym": ["Believer", "Unstoppable", "Till I Collapse", "Remember The Name", "Zinda", "Sultan Title"],
+    "lofi": ["Hindi Lofi Chill", "Tum Se Hi Lofi", "Kun Faya Kun Lofi", "Baarishein Lofi", "Aaoge Jab Tum Lofi"],
+    "romantic": ["Kesariya", "Tum Hi Ho", "Raataan Lambiyan", "Pehle Bhi Main", "Hawayein", "Tera Ban Jaunga"],
+    "devotional": ["Hanuman Chalisa", "Gayatri Mantra", "Achyutam Keshavam", "Om Namah Shivaya"],
+    "90s": ["Pehla Nasha", "Tujhe Dekha To", "Kuch Kuch Hota Hai", "Ye Kaali Kaali Aankhen", "Dil To Pagal Hai"],
+    "english": ["Shape of You", "Blinding Lights", "Perfect", "Someone You Loved", "Night Changes"],
+    "punjabi": ["Excuses", "No Love", "295", "Brown Munde", "Lover", "Tauba Tauba"],
 }
 
 
 def mood_pick(prompt: str) -> str:
     p = prompt.lower()
-    for mood, kw in {
+    for mood, kws in {
         "sad": ["sad", "dard", "rona", "broken", "cry", "dukh"],
-        "party": ["party", "dance", "nacho", "club", "dj"],
-        "gym": ["gym", "workout", "energy", "power"],
+        "party": ["party", "dance", "nacho", "club", "dj", "masti"],
+        "gym": ["gym", "workout", "energy", "power", "motivation"],
         "lofi": ["lofi", "chill", "relax", "sleep", "study"],
-        "romantic": ["romantic", "love", "pyar", "ishq"],
-        "devotional": ["bhajan", "mantra", "god", "pooja"],
-        "90s": ["90s", "old", "classic", "retro"],
+        "romantic": ["romantic", "love", "pyar", "ishq", "mohabbat"],
+        "devotional": ["bhajan", "mantra", "god", "pooja", "prayer"],
+        "90s": ["90s", "old", "classic", "retro", "purana"],
         "english": ["english", "hollywood", "pop", "edm"],
-        "punjabi": ["punjabi", "sidhu", "ap dhillon"],
+        "punjabi": ["punjabi", "sidhu", "ap dhillon", "diljit"],
     }.items():
-        if any(w in p for w in kw):
+        if any(w in p for w in kws):
             return random.choice(MOODS[mood])
     return random.choice([t for s in MOODS.values() for t in s])
 
@@ -226,7 +236,7 @@ find_cookies()
 
 
 # ==============================================================================
-# YouTube URL Cleaner
+# YouTube
 # ==============================================================================
 def clean_yt(url: str) -> str:
     try:
@@ -247,20 +257,11 @@ def clean_yt(url: str) -> str:
     return url
 
 
-# ==============================================================================
-# YouTube Engine — Multi Strategy
-# ==============================================================================
 class YT:
-    S = [
-        {"n": "tv", "a": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "c": True},
-        {"n": "wc", "a": {"youtube": {"player_client": ["web_creator"]}}, "c": True},
-        {"n": "mw", "a": {"youtube": {"player_client": ["mweb"]}}, "c": True},
-        {"n": "df", "a": {}, "c": False},
-        {"n": "an", "a": {"youtube": {"player_client": ["android"]}}, "c": False},
-    ]
+    """Ultra fast YouTube engine — single best strategy."""
 
-    @classmethod
-    def _o(cls, s: dict, fmt: str) -> dict:
+    @staticmethod
+    def _opts(fmt: str, use_cookies: bool = True) -> dict:
         o = {
             "format": fmt,
             "quiet": True,
@@ -269,25 +270,31 @@ class YT:
             "nocheckcertificate": True,
             "geo_bypass": True,
             "noplaylist": True,
-            "socket_timeout": 15,
-            "retries": 2,
+            "socket_timeout": 10,
+            "retries": 1,
             "cachedir": False,
             "source_address": "0.0.0.0",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["tv_embedded", "mweb"],
+                    "player_skip": ["webpage", "js"],
+                }
+            },
         }
-        if s["a"]:
-            o["extractor_args"] = s["a"]
-        if s["c"] and COOKIES_PATH:
+        if use_cookies and COOKIES_PATH:
             o["cookiefile"] = COOKIES_PATH
         return o
 
-    @classmethod
-    def _get(cls, q: str, vid: bool = False) -> Optional[dict]:
+    @staticmethod
+    def _get(q: str, vid: bool = False) -> Optional[dict]:
         if "youtu" in q:
             q = clean_yt(q)
         fmt = "best" if vid else "bestaudio/best"
-        for s in cls.S:
+
+        # Try with cookies first
+        for use_ck in ([True, False] if COOKIES_PATH else [False]):
             try:
-                with yt_dlp.YoutubeDL(cls._o(s, fmt)) as ydl:
+                with yt_dlp.YoutubeDL(YT._opts(fmt, use_ck)) as ydl:
                     info = ydl.extract_info(q, download=False)
                 if not info:
                     continue
@@ -312,6 +319,8 @@ class YT:
         for t in (info.get("thumbnails") or []):
             if t.get("url"):
                 th = t["url"]
+        if info.get("thumbnail"):
+            th = info["thumbnail"]
         return Track(
             id_=info.get("id", "yt"),
             title=(info.get("title") or "Unknown")[:55],
@@ -324,17 +333,14 @@ class YT:
 
 
 # ==============================================================================
-# Resolver
+# Resolver — Instant
 # ==============================================================================
 async def find_track(q: str, vid: bool = False, force_yt: bool = False) -> Optional[Track]:
     q = q.strip()
-    is_url = q.startswith("http")
-
     t = await YT.track(q, vid)
     if t:
         return t
-
-    if not is_url and not vid and not force_yt:
+    if not q.startswith("http") and not vid and not force_yt:
         try:
             t = await saavn.get_first_result(q)
             if t:
@@ -345,50 +351,79 @@ async def find_track(q: str, vid: bool = False, force_yt: bool = False) -> Optio
 
 
 # ==============================================================================
-# UI — Clean Bold Human Style
+# Premium UI — Bold, Clean, Human
 # ==============================================================================
-def mk_card(track: Track, by: str, state: ChatState, cid: int, vid: bool = False) -> str:
+OWNER = "@stillrahul"
+
+
+def make_card(track: Track, by: str, state: ChatState, cid: int,
+              vid: bool = False) -> str:
     dur = getattr(track, "duration_str", None) or f"{track.duration}s"
-    src = "📹 Video" if vid else ("🎵" if "Saavn" not in (track.album or "") else "🎶")
-    st = "⏸" if state.is_paused else "▶"
-    lo = " · 🌙" if cid in LOFI_CHATS else ""
-    lp = " · 🔁" if state.loop else ""
-    dj = " · 🤖 Auto-DJ" if AUTODJ.get(cid) else ""
+
+    if vid:
+        src = "📹  Video Stream"
+    elif "Saavn" in (track.album or ""):
+        src = "🎶  JioSaavn"
+    else:
+        src = "🎧  YouTube HQ"
+
+    parts = [src, dur]
+    if state.is_paused:
+        parts.append("Paused ⏸")
+    if state.loop:
+        parts.append("Loop 🔁")
+    if cid in LOFI_CHATS:
+        parts.append("LoFi 🌙")
+    if AUTODJ.get(cid):
+        parts.append("Auto-DJ 🤖")
+
+    info_line = "  ·  ".join(parts)
+    q_count = len(state.queue)
 
     return (
-        f"<b>{track.title}</b>\n"
-        f"<i>{track.artist}</i>\n\n"
-        f"{src} {dur}  {st}{lo}{lp}{dj}\n\n"
-        f"<b>{by}</b>"
+        f"<b>🎵  {track.title}</b>\n"
+        f"<b>     {track.artist}</b>\n\n"
+        f"{info_line}\n"
+        f"{'📋  ' + str(q_count) + ' in queue' if q_count else ''}\n\n"
+        f"<b>Played by {by}</b>\n"
+        f"<b>Powered by {OWNER}</b>"
     )
 
 
-def mk_btns(state: ChatState, cid: int) -> InlineKeyboardMarkup:
-    pp = ("▶", "q_rs") if state.is_paused else ("⏸", "q_ps")
-    lp = ("🔁 ✓", "q_lp") if state.loop else ("🔁", "q_lp")
-    dj = ("🤖 ✓", "q_dj") if AUTODJ.get(cid) else ("🤖", "q_dj")
+def make_buttons(state: ChatState, cid: int) -> InlineKeyboardMarkup:
+    if state.is_paused:
+        pp_text, pp_cb = "Resume ▶", "q_rs"
+    else:
+        pp_text, pp_cb = "Pause ⏸", "q_ps"
+
+    loop_text = "Loop ✅" if state.loop else "Loop 🔁"
+    lofi_text = "LoFi ✅" if cid in LOFI_CHATS else "LoFi 🌙"
+    dj_text = "Auto-DJ ✅" if AUTODJ.get(cid) else "Auto-DJ 🤖"
 
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(pp[0], callback_data=pp[1]),
-            InlineKeyboardButton("⏭", callback_data="q_sk"),
-            InlineKeyboardButton("⏹", callback_data="q_st"),
+            InlineKeyboardButton(pp_text, callback_data=pp_cb),
+            InlineKeyboardButton("Skip ⏭", callback_data="q_sk"),
+            InlineKeyboardButton("Stop ⏹", callback_data="q_st"),
         ],
         [
-            InlineKeyboardButton(lp[0], callback_data=lp[1]),
-            InlineKeyboardButton("🔀", callback_data="q_sh"),
-            InlineKeyboardButton("🌙", callback_data="q_lo"),
+            InlineKeyboardButton(loop_text, callback_data="q_lp"),
+            InlineKeyboardButton(lofi_text, callback_data="q_lo"),
+            InlineKeyboardButton("Shuffle 🔀", callback_data="q_sh"),
         ],
         [
-            InlineKeyboardButton("📋", callback_data="q_q"),
-            InlineKeyboardButton("🗑", callback_data="q_rm"),
-            InlineKeyboardButton(dj[0], callback_data=dj[1]),
+            InlineKeyboardButton(dj_text, callback_data="q_dj"),
+            InlineKeyboardButton("Queue 📋", callback_data="q_q"),
+            InlineKeyboardButton("Remove 🗑", callback_data="q_rm"),
+        ],
+        [
+            InlineKeyboardButton(f"✨ {OWNER}", url="https://t.me/stillrahul"),
         ],
     ])
 
 
 # ==============================================================================
-# Stream
+# Stream Engine
 # ==============================================================================
 async def go_stream(cid: int, track: Track, vid: bool = False):
     if vid:
@@ -409,6 +444,7 @@ async def show_card(cid: int, state: ChatState, vid: bool = False):
     if not state.current:
         return
 
+    # Delete old card
     old = NOW_MSG.pop(cid, None)
     if old:
         try:
@@ -417,59 +453,58 @@ async def show_card(cid: int, state: ChatState, vid: bool = False):
             pass
 
     it = state.current
-    cap = mk_card(it.track, it.requested_by, state, cid, vid)
+    cap = make_card(it.track, it.requested_by, state, cid, vid)
+
     try:
         msg = await bot.send_photo(
             cid, photo=it.track.thumb or DEFAULT_THUMB,
-            caption=cap, reply_markup=mk_btns(state, cid),
+            caption=cap, reply_markup=make_buttons(state, cid),
         )
         NOW_MSG[cid] = msg.id
     except Exception:
         try:
-            msg = await bot.send_message(cid, cap, reply_markup=mk_btns(state, cid))
+            msg = await bot.send_message(
+                cid, cap, reply_markup=make_buttons(state, cid)
+            )
             NOW_MSG[cid] = msg.id
         except Exception:
             pass
 
 
 # ==============================================================================
-# Auto-DJ — AI picks next song when queue empty
+# Auto-DJ Engine — Pre-fills queue with 2 songs
 # ==============================================================================
-async def autodj_pick(cid: int):
-    """AI-powered Auto-DJ: picks and plays next song."""
+async def autodj_fill(cid: int):
+    """Pre-fill queue with 2 AI-suggested songs."""
     if not AUTODJ.get(cid):
-        return False
+        return
+
+    state = queues.get(cid)
+    needed = 2 - len(state.queue)
+    if needed <= 0:
+        return
 
     history = PLAY_HISTORY.get(cid, [])
-    suggestion = await ai_suggest(history)
+    suggestions = await ai_suggest(history, count=needed)
 
-    if not suggestion:
-        return False
-
-    logger.info(f"🤖 Auto-DJ [{cid}]: {suggestion}")
-
-    track = await find_track(suggestion)
-    if not track:
-        return False
-
-    # Add to history
-    if cid not in PLAY_HISTORY:
-        PLAY_HISTORY[cid] = []
-    PLAY_HISTORY[cid].append(track.title)
-    if len(PLAY_HISTORY[cid]) > 20:
-        PLAY_HISTORY[cid] = PLAY_HISTORY[cid][-15:]
-
-    queues.add(cid, track, "🤖 Auto-DJ")
-    return True
+    for song_name in suggestions:
+        track = await find_track(song_name)
+        if track:
+            added, _ = queues.add(cid, track, "🤖 Auto-DJ")
+            if added:
+                logger.info(f"🤖 DJ queued: {track.title}")
+                if cid not in PLAY_HISTORY:
+                    PLAY_HISTORY[cid] = []
+                PLAY_HISTORY[cid].append(track.title)
 
 
 async def advance(cid: int):
     nxt = queues.next(cid)
 
     if not nxt:
-        # Auto-DJ kicks in
-        picked = await autodj_pick(cid)
-        if picked:
+        # Auto-DJ: fill and try again
+        if AUTODJ.get(cid):
+            await autodj_fill(cid)
             nxt = queues.next(cid)
 
     if not nxt:
@@ -484,14 +519,20 @@ async def advance(cid: int):
         vid = "Video" in (nxt.track.album or "")
         await go_stream(cid, nxt.track, vid)
 
-        # Track history for AI
+        # Track for AI learning
         if cid not in PLAY_HISTORY:
             PLAY_HISTORY[cid] = []
         PLAY_HISTORY[cid].append(nxt.track.title)
+        if len(PLAY_HISTORY[cid]) > 25:
+            PLAY_HISTORY[cid] = PLAY_HISTORY[cid][-20:]
 
         await show_card(cid, queues.get(cid), vid)
+
+        # Pre-fill next songs in background
+        asyncio.create_task(autodj_fill(cid))
+
     except Exception as e:
-        logger.warning(f"Advance err: {e}")
+        logger.warning(f"Stream error: {e}")
         queues.get(cid).loop = False
         await asyncio.sleep(0.5)
         await advance(cid)
@@ -507,32 +548,32 @@ async def on_end(_, update):
 
 
 # ==============================================================================
-# Play Core — Zero spam, ultra fast
+# Play Core — Ultra Fast, Zero Spam
 # ==============================================================================
 async def _play(cid: int, q: str, by: str, msg: Message,
                 vid: bool = False, force: bool = False):
     asyncio.create_task(auto_del(msg))
 
-    status = await bot.send_message(cid, "⚡")
+    status = await bot.send_message(cid, f"<b>⚡  Searching...</b>")
     t0 = time.time()
 
     track = await find_track(q, vid, force)
     ms = round((time.time() - t0) * 1000)
 
     if not track:
-        await safe_edit(status, "❌ <b>Not found</b>")
-        await asyncio.sleep(2)
+        await safe_edit(status, f"<b>❌  Track not found</b>\n<i>Try a different name</i>")
+        await asyncio.sleep(3)
         await safe_del(status)
         return
 
-    # Track history for AI
+    # History
     if cid not in PLAY_HISTORY:
         PLAY_HISTORY[cid] = []
     PLAY_HISTORY[cid].append(track.title)
 
     added, pos = queues.add(cid, track, by)
     if not added:
-        await safe_edit(status, "⚠️ <b>Queue full</b>")
+        await safe_edit(status, "<b>⚠️  Queue is full</b>")
         await asyncio.sleep(2)
         await safe_del(status)
         return
@@ -544,34 +585,44 @@ async def _play(cid: int, q: str, by: str, msg: Message,
             await go_stream(cid, track, vid)
             await safe_del(status)
             await show_card(cid, state, vid)
+            # Pre-fill if autodj on
+            asyncio.create_task(autodj_fill(cid))
         except NoActiveGroupCall:
             queues.clear(cid)
-            await safe_edit(status, "❌ <b>Start VC first</b>")
-            await asyncio.sleep(2)
+            await safe_edit(status,
+                "<b>❌  Voice Chat is not active</b>\n"
+                "<i>Start a voice chat in this group first</i>")
+            await asyncio.sleep(3)
             await safe_del(status)
         except Exception as e:
             queues.clear(cid)
-            await safe_edit(status, f"❌ <code>{str(e)[:120]}</code>")
+            await safe_edit(status, f"<b>❌  {str(e)[:100]}</b>")
             await asyncio.sleep(3)
             await safe_del(status)
     else:
         await safe_edit(
             status,
-            f"<b>+{pos}</b>  {track.title}\n<i>{ms}ms</i>"
+            f"<b>📥  Added to queue #{pos}</b>\n"
+            f"<b>{track.title}</b> — {track.artist}\n"
+            f"<i>{ms}ms</i>"
         )
         await asyncio.sleep(3)
         await safe_del(status)
 
 
 # ==============================================================================
-# Commands — All auto-delete, zero spam
+# Commands
 # ==============================================================================
 @bot.on_message(filters.command(["play", "p"]) & filters.group)
 async def cmd_play(_, m: Message):
     if len(m.command) < 2:
-        r = await m.reply("<code>/play song name</code>")
+        r = await m.reply(
+            "<b>🎵  Play a song</b>\n"
+            "<code>/play song name</code>\n"
+            "<code>/play YouTube URL</code>"
+        )
         asyncio.create_task(auto_del(m))
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         return await safe_del(r)
     await _play(m.chat.id, m.text.split(None, 1)[1], uname(m), m)
 
@@ -579,9 +630,12 @@ async def cmd_play(_, m: Message):
 @bot.on_message(filters.command(["vplay", "vp", "video"]) & filters.group)
 async def cmd_vplay(_, m: Message):
     if len(m.command) < 2:
-        r = await m.reply("<code>/vplay song name</code>")
+        r = await m.reply(
+            "<b>📹  Play video</b>\n"
+            "<code>/vplay song name</code>"
+        )
         asyncio.create_task(auto_del(m))
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         return await safe_del(r)
     await _play(m.chat.id, m.text.split(None, 1)[1], uname(m), m, vid=True)
 
@@ -589,9 +643,12 @@ async def cmd_vplay(_, m: Message):
 @bot.on_message(filters.command(["playforce", "pf"]) & filters.group)
 async def cmd_pf(_, m: Message):
     if len(m.command) < 2:
-        r = await m.reply("<code>/playforce song</code>")
+        r = await m.reply(
+            "<b>🔒  Force YouTube</b>\n"
+            "<code>/playforce song name</code>"
+        )
         asyncio.create_task(auto_del(m))
-        await asyncio.sleep(2)
+        await asyncio.sleep(3)
         return await safe_del(r)
     await _play(m.chat.id, m.text.split(None, 1)[1], uname(m), m, force=True)
 
@@ -601,14 +658,11 @@ async def cmd_ai(_, m: Message):
     asyncio.create_task(auto_del(m))
 
     if len(m.command) >= 2:
-        # User gave mood
         pick = mood_pick(m.text.split(None, 1)[1])
     else:
-        # No mood — AI picks based on history
         history = PLAY_HISTORY.get(m.chat.id, [])
-        pick = await ai_suggest(history)
-        if not pick:
-            pick = mood_pick("random")
+        suggestions = await ai_suggest(history, 1)
+        pick = suggestions[0] if suggestions else mood_pick("random")
 
     await _play(m.chat.id, pick, f"🤖 {uname(m)}", m)
 
@@ -618,34 +672,44 @@ async def cmd_autodj(_, m: Message):
     asyncio.create_task(auto_del(m))
     cid = m.chat.id
     AUTODJ[cid] = not AUTODJ.get(cid, False)
-    st = "ON" if AUTODJ[cid] else "OFF"
-    r = await m.reply(f"<b>🤖 Auto-DJ: {st}</b>")
-    await asyncio.sleep(2)
+    on = AUTODJ[cid]
+
+    r = await m.reply(
+        f"<b>🤖  Auto-DJ is {'ON' if on else 'OFF'}</b>\n"
+        f"<i>{'AI will keep playing songs for you' if on else 'Stopped auto playing'}</i>"
+    )
+    await asyncio.sleep(3)
     await safe_del(r)
 
-    # If turning on and nothing playing, start immediately
-    if AUTODJ[cid]:
+    if on:
         s = queues.get(cid)
         if not s.is_playing:
+            # Start playing immediately
+            status = await bot.send_message(cid, "<b>🤖  Auto-DJ starting...</b>")
             history = PLAY_HISTORY.get(cid, [])
-            suggestion = await ai_suggest(history)
-            if suggestion:
-                status = await bot.send_message(cid, "🤖 <b>Auto-DJ starting...</b>")
-                track = await find_track(suggestion)
+            suggestions = await ai_suggest(history, 3)
+
+            started = False
+            for song_name in suggestions:
+                track = await find_track(song_name)
                 if track:
                     if cid not in PLAY_HISTORY:
                         PLAY_HISTORY[cid] = []
                     PLAY_HISTORY[cid].append(track.title)
                     added, pos = queues.add(cid, track, "🤖 Auto-DJ")
-                    if added and pos == 0:
+                    if added and pos == 0 and not started:
                         try:
                             await go_stream(cid, track)
-                            await safe_del(status)
-                            await show_card(cid, queues.get(cid))
-                            return
+                            started = True
                         except Exception:
                             pass
-                await safe_del(status)
+
+            await safe_del(status)
+            if started:
+                await show_card(cid, queues.get(cid))
+        else:
+            # Already playing — just pre-fill queue
+            asyncio.create_task(autodj_fill(cid))
 
 
 @bot.on_message(filters.command(["skip", "s"]) & filters.group)
@@ -727,18 +791,23 @@ async def cmd_queue(_, m: Message):
     asyncio.create_task(auto_del(m))
     s = queues.get(m.chat.id)
     if not s.current and not s.queue:
-        r = await m.reply("<b>Empty</b>")
+        r = await m.reply("<b>📋  Queue is empty</b>")
         await asyncio.sleep(2)
         return await safe_del(r)
+
     lines = []
     if s.current:
-        lines.append(f"<b>▶ {s.current.track.title}</b>")
-    for i, it in enumerate(s.queue[:8], 1):
-        lines.append(f"{i}. {it.track.title}")
-    if len(s.queue) > 8:
-        lines.append(f"<i>+{len(s.queue) - 8}</i>")
-    r = await m.reply("\n".join(lines))
-    await asyncio.sleep(8)
+        lines.append(f"<b>▶  {s.current.track.title}</b>  —  {s.current.requested_by}")
+    if s.queue:
+        for i, it in enumerate(s.queue[:8], 1):
+            lines.append(f"<b>{i}.</b>  {it.track.title}")
+        if len(s.queue) > 8:
+            lines.append(f"\n<i>and {len(s.queue) - 8} more...</i>")
+
+    dj = "\n\n<b>🤖  Auto-DJ is filling the queue</b>" if AUTODJ.get(m.chat.id) else ""
+
+    r = await m.reply("\n".join(lines) + dj)
+    await asyncio.sleep(10)
     await safe_del(r)
 
 
@@ -746,6 +815,9 @@ async def cmd_queue(_, m: Message):
 async def cmd_shuffle(_, m: Message):
     asyncio.create_task(auto_del(m))
     queues.shuffle(m.chat.id)
+    r = await m.reply("<b>🔀  Queue shuffled</b>")
+    await asyncio.sleep(2)
+    await safe_del(r)
 
 
 @bot.on_message(filters.command(["remove", "rm"]) & filters.group)
@@ -753,7 +825,11 @@ async def cmd_rm(_, m: Message):
     asyncio.create_task(auto_del(m))
     if len(m.command) >= 2:
         try:
-            queues.remove_at(m.chat.id, int(m.command[1]))
+            it = queues.remove_at(m.chat.id, int(m.command[1]))
+            if it:
+                r = await m.reply(f"<b>🗑  Removed:</b> {it.track.title}")
+                await asyncio.sleep(2)
+                await safe_del(r)
         except Exception:
             pass
 
@@ -766,29 +842,19 @@ async def cmd_np(_, m: Message):
         await show_card(m.chat.id, s)
 
 
-@bot.on_message(filters.command("cookies"))
-async def cmd_ck(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    r = await m.reply(f"🍪 {'✅' if COOKIES_PATH else '❌'}")
-    await asyncio.sleep(3)
-    await safe_del(r)
-
-
-@bot.on_message(filters.command("reloadcookies"))
-async def cmd_rc(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    if not is_sudo(m):
-        return
-    find_cookies()
-
-
 @bot.on_message(filters.command("ping"))
 async def cmd_ping(_, m: Message):
     asyncio.create_task(auto_del(m))
     t1 = time.time()
     r = await m.reply("·")
-    await safe_edit(r, f"<b>{round((time.time() - t1) * 1000)}ms</b>")
-    await asyncio.sleep(3)
+    ms = round((time.time() - t1) * 1000)
+    await safe_edit(r,
+        f"<b>🏓  {ms}ms</b>\n"
+        f"🍪  {'Online' if COOKIES_PATH else 'No cookies'}\n"
+        f"🤖  Auto-DJ ready\n\n"
+        f"<b>{OWNER}</b>"
+    )
+    await asyncio.sleep(4)
     await safe_del(r)
 
 
@@ -796,30 +862,41 @@ async def cmd_ping(_, m: Message):
 async def cmd_help(_, m: Message):
     asyncio.create_task(auto_del(m))
     r = await m.reply(
-        "<b>FastTrack VC Music</b>\n\n"
-        "/play — Audio\n"
-        "/vplay — Video\n"
-        "/playforce — Force YT\n"
-        "/aiplay — Smart AI play\n"
-        "/autodj — AI Auto-DJ toggle\n\n"
-        "/pause · /resume · /skip · /stop\n"
-        "/loop · /lofi · /shuffle\n"
-        "/queue · /remove · /np\n\n"
-        "<b>@stillrahul</b>"
+        f"<b>🎵  FastTrack VC Music</b>\n"
+        f"<i>Premium music experience for Telegram</i>\n\n"
+        f"<b>Play Music</b>\n"
+        f"/play — Stream audio\n"
+        f"/vplay — Stream video\n"
+        f"/playforce — Force YouTube\n"
+        f"/aiplay — AI smart play\n"
+        f"/autodj — AI keeps playing\n\n"
+        f"<b>Controls</b>\n"
+        f"/pause  /resume  /skip  /stop\n"
+        f"/loop  /lofi  /shuffle\n\n"
+        f"<b>Queue</b>\n"
+        f"/queue  /remove  /np\n\n"
+        f"<b>Built by {OWNER}</b>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"✨ {OWNER}", url="https://t.me/stillrahul"),
+        ]])
     )
-    await asyncio.sleep(15)
+    await asyncio.sleep(20)
     await safe_del(r)
 
 
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, m: Message):
     await m.reply(
-        "<b>FastTrack VC Music</b>\n\n"
-        "Add to group → Start VC → /play\n\n"
-        "<b>@stillrahul</b>",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("Owner", url="https://t.me/stillrahul"),
-        ]])
+        f"<b>🎵  FastTrack VC Music</b>\n\n"
+        f"Add me to a group\n"
+        f"Start a voice chat\n"
+        f"Type <code>/play song name</code>\n\n"
+        f"<b>Built by {OWNER}</b>",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"✨ {OWNER}", url="https://t.me/stillrahul")],
+            [InlineKeyboardButton("Add to Group",
+                url=f"https://t.me/{(await bot.get_me()).username}?startgroup=true")],
+        ])
     )
 
 
@@ -837,31 +914,36 @@ async def cb(_, q: CallbackQuery):
             if s.is_playing and not s.is_paused:
                 await calls.pause_stream(cid)
                 s.is_paused = True
-                cap = mk_card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-                if cap:
+                if s.current:
+                    cap = make_card(s.current.track, s.current.requested_by, s, cid)
                     try:
-                        await q.message.edit_caption(caption=cap, reply_markup=mk_btns(s, cid))
+                        await q.message.edit_caption(
+                            caption=cap, reply_markup=make_buttons(s, cid))
                     except Exception:
                         pass
-            await q.answer("⏸")
+            await q.answer("Paused ⏸")
 
         elif a == "q_rs":
             if s.is_paused:
                 await calls.resume_stream(cid)
                 s.is_paused = False
-                cap = mk_card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-                if cap:
+                if s.current:
+                    cap = make_card(s.current.track, s.current.requested_by, s, cid)
                     try:
-                        await q.message.edit_caption(caption=cap, reply_markup=mk_btns(s, cid))
+                        await q.message.edit_caption(
+                            caption=cap, reply_markup=make_buttons(s, cid))
                     except Exception:
                         pass
-            await q.answer("▶")
+            await q.answer("Playing ▶")
 
         elif a == "q_sk":
-            s.loop = False
-            await q.answer("⏭")
-            await safe_del(q.message)
-            await advance(cid)
+            if s.is_playing:
+                s.loop = False
+                await q.answer("Skipping ⏭")
+                await safe_del(q.message)
+                await advance(cid)
+            else:
+                await q.answer("Nothing playing")
 
         elif a == "q_st":
             AUTODJ[cid] = False
@@ -872,66 +954,81 @@ async def cb(_, q: CallbackQuery):
                 pass
             await safe_del(q.message)
             NOW_MSG.pop(cid, None)
-            await q.answer("⏹")
+            await q.answer("Stopped ⏹")
 
         elif a == "q_lp":
             if s.is_playing:
                 s.loop = not s.loop
-                cap = mk_card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-                if cap:
+                if s.current:
+                    cap = make_card(s.current.track, s.current.requested_by, s, cid)
                     try:
-                        await q.message.edit_caption(caption=cap, reply_markup=mk_btns(s, cid))
+                        await q.message.edit_caption(
+                            caption=cap, reply_markup=make_buttons(s, cid))
                     except Exception:
                         pass
-            await q.answer(f"{'🔁 On' if s.loop else '🔁 Off'}")
-
-        elif a == "q_sh":
-            if s.queue:
-                queues.shuffle(cid)
-            await q.answer("🔀")
+                await q.answer(f"Loop {'on ✅' if s.loop else 'off'}")
+            else:
+                await q.answer("Nothing playing")
 
         elif a == "q_lo":
             if cid in LOFI_CHATS:
                 LOFI_CHATS.discard(cid)
-                await q.answer("🌙 Off")
+                await q.answer("LoFi off 🌙")
             else:
                 LOFI_CHATS.add(cid)
-                await q.answer("🌙 On")
-            cap = mk_card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-            if cap:
+                await q.answer("LoFi on ✅")
+            if s.current:
+                cap = make_card(s.current.track, s.current.requested_by, s, cid)
                 try:
-                    await q.message.edit_caption(caption=cap, reply_markup=mk_btns(s, cid))
+                    await q.message.edit_caption(
+                        caption=cap, reply_markup=make_buttons(s, cid))
                 except Exception:
                     pass
 
+        elif a == "q_sh":
+            if s.queue:
+                queues.shuffle(cid)
+                await q.answer("Shuffled 🔀")
+            else:
+                await q.answer("Queue empty")
+
         elif a == "q_dj":
             AUTODJ[cid] = not AUTODJ.get(cid, False)
-            st = "🤖 On" if AUTODJ[cid] else "🤖 Off"
-            cap = mk_card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-            if cap:
+            on = AUTODJ[cid]
+            if s.current:
+                cap = make_card(s.current.track, s.current.requested_by, s, cid)
                 try:
-                    await q.message.edit_caption(caption=cap, reply_markup=mk_btns(s, cid))
+                    await q.message.edit_caption(
+                        caption=cap, reply_markup=make_buttons(s, cid))
                 except Exception:
                     pass
-            await q.answer(st)
+            await q.answer(f"Auto-DJ {'on ✅' if on else 'off'}")
+
+            if on:
+                asyncio.create_task(autodj_fill(cid))
 
         elif a == "q_q":
             lines = []
             if s.current:
-                lines.append(f"▶ {s.current.track.title}")
+                lines.append(f"▶  {s.current.track.title}")
             for i, it in enumerate(s.queue[:6], 1):
-                lines.append(f"{i}. {it.track.title}")
+                lines.append(f"{i}.  {it.track.title}")
             if len(s.queue) > 6:
-                lines.append(f"+{len(s.queue) - 6}")
+                lines.append(f"+{len(s.queue) - 6} more")
             await q.answer("\n".join(lines) or "Empty", show_alert=True)
 
         elif a == "q_rm":
-            it = queues.remove_at(cid, 1) if s.queue else None
-            await q.answer(f"🗑 {it.track.title}" if it else "Empty", show_alert=True)
+            if s.queue:
+                it = queues.remove_at(cid, 1)
+                await q.answer(
+                    f"Removed: {it.track.title}" if it else "Nothing",
+                    show_alert=True)
+            else:
+                await q.answer("Queue empty", show_alert=True)
 
     except Exception as e:
         logger.exception(f"CB {a}: {e}")
-        await q.answer("—")
+        await q.answer("Error")
 
 
 # ==============================================================================
@@ -941,7 +1038,9 @@ async def watchdog():
     while True:
         await asyncio.sleep(30)
         try:
-            for cid in queues.cleanup_idle(getattr(config, "AUTO_LEAVE_SECONDS", 180)):
+            for cid in queues.cleanup_idle(
+                getattr(config, "AUTO_LEAVE_SECONDS", 180)
+            ):
                 AUTODJ.pop(cid, None)
                 PLAY_HISTORY.pop(cid, None)
                 try:
@@ -959,8 +1058,8 @@ async def watchdog():
 # ==============================================================================
 async def boot():
     print("=" * 45)
-    print("  FastTrack VC Music — Masterpiece")
-    print("  @stillrahul")
+    print(f"  FastTrack VC Music — Premium")
+    print(f"  {OWNER}")
     print("=" * 45)
 
     await assistant.start()
@@ -970,8 +1069,8 @@ async def boot():
     b = await bot.get_me()
     a = await assistant.get_me()
 
-    print(f"\n  @{b.username}")
-    print(f"  {a.first_name} [{a.id}]")
+    print(f"\n  Bot: @{b.username}")
+    print(f"  Assistant: {a.first_name} [{a.id}]")
     print(f"  Cookies: {'✅' if COOKIES_PATH else '❌'}")
     print(f"\n  Ready.\n")
 
