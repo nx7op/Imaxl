@@ -2,8 +2,8 @@
 """
 ================================================================================
  ⚡ FastTrack VC Music Bot — YouTube HQ Edition 2026
- Core Engine: YouTube PRIMARY (tv_embedded bypass) + JioSaavn FALLBACK
- Developer & System Architect: @stillrahul
+ YouTube PRIMARY + JioSaavn Fallback (auto)
+ Developer: @stillrahul
 ================================================================================
 """
 
@@ -27,14 +27,14 @@ try:
         Message,
     )
 except ImportError:
-    sys.exit("❌ Error: pyrofork/pyrogram missing.")
+    sys.exit("❌ pyrofork missing.")
 
 try:
     from pytgcalls import PyTgCalls
     from pytgcalls.types import MediaStream, AudioQuality
     from pytgcalls.exceptions import NoActiveGroupCall
 except ImportError:
-    sys.exit("❌ Error: py-tgcalls missing.")
+    sys.exit("❌ py-tgcalls missing.")
 
 import yt_dlp
 import config
@@ -77,10 +77,6 @@ DEFAULT_THUMB = "https://telegra.ph/file/default_music_thumb.jpg"
 DSP_MATRIX: dict[int, str] = {}
 NOW_PLAYING_MSG: dict[int, int] = {}
 
-ENABLE_SAAVN_FALLBACK = os.getenv("ENABLE_SAAVN_FALLBACK", "false").lower() in {
-    "1", "true", "yes", "on",
-}
-
 # ==============================================================================
 # Owner Helper
 # ==============================================================================
@@ -90,11 +86,8 @@ def is_owner(message: Message) -> bool:
         return False
     owner_id = getattr(config, "OWNER_ID", 0)
     sudo = getattr(config, "SUDO_USERS", set())
-    if owner_id and user.id == owner_id:
-        return True
-    if user.id in sudo:
-        return True
-    return False
+    return (owner_id and user.id == owner_id) or (user.id in sudo)
+
 
 # ==============================================================================
 # AI Mood Database
@@ -102,7 +95,7 @@ def is_owner(message: Message) -> bool:
 AI_MOOD_DATABASE = {
     "sad": [
         "tu jaane na atif aslam",
-        "channa mereya arijit singh",
+        "channa mereya arijit",
         "kabira encore",
         "agar tum sath ho",
         "tujhe bhula diya",
@@ -117,9 +110,9 @@ AI_MOOD_DATABASE = {
     "gym": [
         "believer imagine dragons",
         "unstoppable sia",
-        "remember the name fort minor",
+        "remember the name",
         "till i collapse eminem",
-        "zinda bhaag milkha bhaag",
+        "zinda bhaag milkha",
     ],
     "lofi": [
         "hindi lofi chill mix",
@@ -129,11 +122,11 @@ AI_MOOD_DATABASE = {
         "aaoge jab tum lofi",
     ],
     "romantic": [
-        "kesariya arijit singh",
-        "tum hi ho arijit singh",
+        "kesariya arijit",
+        "tum hi ho arijit",
         "raataan lambiyan",
         "pehle bhi main",
-        "hawayein arijit singh",
+        "hawayein arijit",
     ],
     "devotional": [
         "hanuman chalisa",
@@ -145,7 +138,7 @@ AI_MOOD_DATABASE = {
     "90s": [
         "pehla nasha",
         "tujhe dekha to",
-        "kuch kuch hota hai title song",
+        "kuch kuch hota hai",
         "ek ladki ko dekha",
         "ye kaali kaali aankhen",
     ],
@@ -154,7 +147,7 @@ AI_MOOD_DATABASE = {
 
 def analyze_vibe_prompt(prompt: str) -> str:
     p = prompt.lower()
-    if any(w in p for w in ["sad", "dard", "rona", "broken", "cry", "dukh", "udaas"]):
+    if any(w in p for w in ["sad", "dard", "rona", "broken", "cry", "dukh"]):
         return random.choice(AI_MOOD_DATABASE["sad"])
     if any(w in p for w in ["party", "dance", "nacho", "club", "dj"]):
         return random.choice(AI_MOOD_DATABASE["party"])
@@ -162,18 +155,18 @@ def analyze_vibe_prompt(prompt: str) -> str:
         return random.choice(AI_MOOD_DATABASE["gym"])
     if any(w in p for w in ["lofi", "chill", "relax", "sleep", "study"]):
         return random.choice(AI_MOOD_DATABASE["lofi"])
-    if any(w in p for w in ["romantic", "love", "pyar", "ishq", "mohabbat"]):
+    if any(w in p for w in ["romantic", "love", "pyar", "ishq"]):
         return random.choice(AI_MOOD_DATABASE["romantic"])
-    if any(w in p for w in ["bhajan", "devotional", "mantra", "god", "pooja"]):
+    if any(w in p for w in ["bhajan", "devotional", "mantra", "god"]):
         return random.choice(AI_MOOD_DATABASE["devotional"])
-    if any(w in p for w in ["90s", "old", "classic", "retro", "purana"]):
+    if any(w in p for w in ["90s", "old", "classic", "retro"]):
         return random.choice(AI_MOOD_DATABASE["90s"])
-    all_tracks = [t for sub in AI_MOOD_DATABASE.values() for t in sub]
-    return random.choice(all_tracks)
+    all_t = [t for sub in AI_MOOD_DATABASE.values() for t in sub]
+    return random.choice(all_t)
 
 
 # ==============================================================================
-# Cookies Finder
+# Cookies
 # ==============================================================================
 COOKIES_PATH: Optional[str] = None
 
@@ -186,11 +179,10 @@ def find_cookies() -> Optional[str]:
         os.path.join(os.getcwd(), "cookies.txt"),
         os.path.join(base_dir, "cookies.txt"),
         "/app/cookies.txt",
-        "/app/data/cookies.txt",
     ]
     for path in paths:
         try:
-            if os.path.exists(path) and os.path.getsize(path) > 20:
+            if os.path.exists(path) and os.path.getsize(path) > 50:
                 COOKIES_PATH = path
                 logger.info(f"✅ cookies.txt found: {path}")
                 return path
@@ -213,7 +205,7 @@ def clean_youtube_url(url: str) -> str:
             vid = parsed.path.strip("/").split("/")[0]
             if len(vid) == 11:
                 return f"https://www.youtube.com/watch?v={vid}"
-        if "youtube.com" in parsed.netloc or "music.youtube.com" in parsed.netloc:
+        if "youtube.com" in parsed.netloc:
             qs = parse_qs(parsed.query)
             if "v" in qs and qs["v"]:
                 return f"https://www.youtube.com/watch?v={qs['v'][0]}"
@@ -222,33 +214,74 @@ def clean_youtube_url(url: str) -> str:
             )
             if match:
                 return f"https://www.youtube.com/watch?v={match.group(1)}"
-        match = re.search(
-            r"(?:v=|youtu\.be/|shorts/|live/|embed/)([A-Za-z0-9_-]{11})", url
-        )
-        if match:
-            return f"https://www.youtube.com/watch?v={match.group(1)}"
     except Exception:
         pass
     return url
 
 
 # ==============================================================================
-# YouTube Engine — 2026 tv_embedded Bypass Fix
+# YouTube Engine — Multi Strategy
 # ==============================================================================
 class YoutubeEngine:
 
-    @staticmethod
-    def _extract(query: str) -> Optional[dict]:
-        # Clean YouTube URL
-        if "youtu" in query:
-            cleaned = clean_youtube_url(query)
-            if cleaned != query:
-                logger.info(f"🔗 Cleaned URL: {cleaned}")
-            query = cleaned
+    # Different strategies to try
+    STRATEGIES = [
+        {
+            "name": "tv_embedded (no JS)",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["tv_embedded"],
+                    "player_skip": ["webpage", "js"],
+                }
+            },
+            "use_cookies": True,
+        },
+        {
+            "name": "web_creator",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["web_creator"],
+                }
+            },
+            "use_cookies": True,
+        },
+        {
+            "name": "mweb (mobile web)",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["mweb"],
+                }
+            },
+            "use_cookies": True,
+        },
+        {
+            "name": "default (no cookies)",
+            "extractor_args": {},
+            "use_cookies": False,
+        },
+        {
+            "name": "android (no cookies)",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"],
+                }
+            },
+            "use_cookies": False,
+        },
+        {
+            "name": "ios (no cookies)",
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["ios"],
+                }
+            },
+            "use_cookies": False,
+        },
+    ]
 
+    @classmethod
+    def _build_opts(cls, strategy: dict) -> dict:
         opts = {
-            # tv_embedded client does NOT need JS challenge solving
-            # This is the KEY fix for "Signature solving failed"
             "format": "bestaudio/best",
             "quiet": True,
             "no_warnings": True,
@@ -256,81 +289,91 @@ class YoutubeEngine:
             "nocheckcertificate": True,
             "geo_bypass": True,
             "noplaylist": True,
-            "socket_timeout": 30,
-            "retries": 5,
-            "fragment_retries": 5,
+            "socket_timeout": 25,
+            "retries": 3,
+            "fragment_retries": 3,
             "ignoreerrors": False,
             "cachedir": False,
-            "extractor_args": {
-                "youtube": {
-                    # tv_embedded = Smart TV client, no JS needed!
-                    "player_client": ["tv_embedded", "web_creator"],
-                    "player_skip": ["webpage", "js"],
-                }
-            },
+            "source_address": "0.0.0.0",
             "http_headers": {
                 "User-Agent": (
-                    "Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) "
-                    "AppleWebKit/538.1 (KHTML, like Gecko) "
-                    "Version/6.0 TV Safari/538.1"
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
                 ),
                 "Accept-Language": "en-US,en;q=0.9",
                 "Accept": "*/*",
             },
         }
 
-        # Inject cookies if available
-        if COOKIES_PATH:
+        if strategy.get("extractor_args"):
+            opts["extractor_args"] = strategy["extractor_args"]
+
+        if strategy.get("use_cookies") and COOKIES_PATH:
             opts["cookiefile"] = COOKIES_PATH
 
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(query, download=False)
+        return opts
+
+    @classmethod
+    def _extract(cls, query: str) -> Optional[dict]:
+        # Clean URL
+        if "youtu" in query:
+            cleaned = clean_youtube_url(query)
+            if cleaned != query:
+                logger.info(f"🔗 Cleaned: {cleaned}")
+            query = cleaned
+
+        # Try each strategy
+        for strategy in cls.STRATEGIES:
+            opts = cls._build_opts(strategy)
+            name = strategy["name"]
+
+            try:
+                logger.info(f"🎬 Trying strategy: {name}")
+
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(query, download=False)
 
                 if not info:
-                    logger.error("❌ YT: No info returned")
-                    return None
+                    logger.warning(f"⚠️ {name}: No info returned")
+                    continue
 
-                # Handle search results
+                # Handle search
                 if "entries" in info:
                     entries = [e for e in (info.get("entries") or []) if e]
                     if not entries:
-                        logger.error("❌ YT: No entries in search result")
-                        return None
+                        logger.warning(f"⚠️ {name}: No entries")
+                        continue
                     info = entries[0]
 
-                # Must have a playable URL
+                # Must have URL
                 if not info.get("url"):
-                    logger.warning("❌ YT: No playable URL found")
-                    return None
+                    logger.warning(f"⚠️ {name}: No URL")
+                    continue
 
-                logger.info(f"✅ YT resolved: {info.get('title', 'Unknown')[:50]}")
+                logger.info(
+                    f"✅ Strategy '{name}' worked! → {info.get('title', '?')[:40]}"
+                )
                 return info
 
-        except yt_dlp.utils.DownloadError as e:
-            err = str(e)
-            if "Sign in" in err or "bot" in err.lower() or "confirm" in err.lower():
-                logger.error("❌ YouTube bot detection! Update cookies.txt")
-            elif "unavailable" in err.lower() or "private" in err.lower():
-                logger.error("❌ YouTube video unavailable or private")
-            elif "format" in err.lower():
-                logger.error(f"❌ YouTube format error: {err[:150]}")
-            else:
-                logger.error(f"❌ YouTube DownloadError: {err[:200]}")
-            return None
+            except yt_dlp.utils.DownloadError as e:
+                err = str(e)
+                logger.warning(f"⚠️ Strategy '{name}' failed: {err[:100]}")
+                continue
 
-        except Exception as e:
-            logger.error(f"❌ YouTube engine crash: {e}")
-            return None
+            except Exception as e:
+                logger.warning(f"⚠️ Strategy '{name}' crashed: {e}")
+                continue
+
+        logger.error("❌ All YouTube strategies failed!")
+        return None
 
     @classmethod
     async def get_track(cls, query: str) -> Optional[Track]:
         info = await asyncio.to_thread(cls._extract, query)
-
         if not info:
             return None
 
-        # Duration
         try:
             duration = int(info.get("duration") or 0)
         except (TypeError, ValueError):
@@ -353,13 +396,9 @@ class YoutubeEngine:
             thumb = info["thumbnail"]
 
         return Track(
-            id_=info.get("id", "yt_unknown"),
-            title=(info.get("title") or "Unknown Track")[:50],
-            artist=(
-                info.get("uploader")
-                or info.get("channel")
-                or "YouTube"
-            )[:35],
+            id_=info.get("id", "yt"),
+            title=(info.get("title") or "Unknown")[:50],
+            artist=(info.get("uploader") or info.get("channel") or "YouTube")[:35],
             album="YouTube HQ Stream",
             duration=duration,
             url=info["url"],
@@ -368,70 +407,50 @@ class YoutubeEngine:
 
 
 # ==============================================================================
-# Track Resolver — YT First, Saavn Fallback
+# Track Resolver — YT First, Saavn Fallback (auto)
 # ==============================================================================
-async def resolve_track(
-    query: str,
-    allow_saavn: bool = ENABLE_SAAVN_FALLBACK
-) -> Optional[Track]:
+async def resolve_track(query: str) -> Optional[Track]:
     query = query.strip()
     is_url = query.startswith("http://") or query.startswith("https://")
 
     # YouTube PRIMARY
-    logger.info(f"🎯 YouTube fetch: {query[:70]}")
+    logger.info(f"🎯 YouTube: {query[:70]}")
     track = await YoutubeEngine.get_track(query)
-
     if track:
-        logger.info(f"✅ YouTube resolved: {track.title}")
         return track
 
-    # Saavn FALLBACK — only for text search, not URLs
-    if allow_saavn and not is_url:
-        logger.info(f"🔄 YT failed → Saavn fallback: {query[:70]}")
+    # Saavn FALLBACK — only for text search
+    if not is_url:
+        logger.info(f"🔄 YT failed → Saavn: {query[:70]}")
         try:
             track = await saavn.get_first_result(query)
             if track:
-                logger.info(f"✅ Saavn resolved: {track.title}")
+                logger.info(f"✅ Saavn: {track.title}")
                 return track
         except Exception as e:
             logger.warning(f"Saavn error: {e}")
 
-    logger.error(f"❌ All sources failed: {query[:70]}")
+    logger.error(f"❌ All failed: {query[:70]}")
     return None
 
 
 # ==============================================================================
-# UI Helpers
+# UI
 # ==============================================================================
-def display_name(message: Message) -> str:
-    user = message.from_user
-    if not user:
+def display_name(msg: Message) -> str:
+    u = msg.from_user
+    if not u:
         return "Anonymous"
-    if user.first_name:
-        return user.first_name
-    if user.username:
-        return f"@{user.username}"
-    return "User"
+    return u.first_name or (f"@{u.username}" if u.username else "User")
 
 
 def source_badge(track: Track) -> str:
-    if "YouTube" in (track.album or ""):
-        return "🎬 YouTube HQ"
-    return "🎵 JioSaavn"
+    return "🎬 YouTube HQ" if "YouTube" in (track.album or "") else "🎵 JioSaavn"
 
 
-def quantum_ui_card(
-    track: Track,
-    requested_by: str,
-    state: ChatState,
-    chat_id: int,
-) -> str:
-    loop_status = "ON ✅" if state.loop else "OFF ❌"
-    pause_status = "Paused ⏸" if state.is_paused else "Playing ▶️"
-    dsp = DSP_MATRIX.get(chat_id, "🌌 Pure HQ")
+def now_playing_card(track: Track, by: str, state: ChatState, cid: int) -> str:
+    dsp = DSP_MATRIX.get(cid, "🌌 Pure HQ")
     dur = getattr(track, "duration_str", None) or f"{track.duration}s"
-    queue_len = len(state.queue)
-
     return (
         f"<b>⚡ FASTTRACK VC MUSIC</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -440,53 +459,39 @@ def quantum_ui_card(
         f"📀 <b>Source:</b> {source_badge(track)}\n"
         f"⏱️ <b>Duration:</b> {dur}\n"
         f"🎛️ <b>Sound:</b> {dsp}\n"
-        f"📋 <b>Queue:</b> {queue_len} pending\n"
-        f"▶️ <b>Status:</b> {pause_status}\n"
-        f"🔁 <b>Loop:</b> {loop_status}\n"
+        f"📋 <b>Queue:</b> {len(state.queue)} pending\n"
+        f"▶️ <b>Status:</b> {'Paused ⏸' if state.is_paused else 'Playing ▶️'}\n"
+        f"🔁 <b>Loop:</b> {'ON ✅' if state.loop else 'OFF ❌'}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎧 <b>Requested by:</b> {requested_by}\n"
+        f"🎧 <b>By:</b> {by}\n"
         f"👑 <b>Owner:</b> @stillrahul\n\n"
-        f"✨ <i>FastTrack VC Music — YouTube HQ</i>"
+        f"✨ <i>FastTrack VC Music</i>"
     )
 
 
 def get_buttons(state: ChatState) -> InlineKeyboardMarkup:
-    pause_text = "▶️ Resume" if state.is_paused else "⏸ Pause"
-    pause_cb = "q_resume" if state.is_paused else "q_pause"
-    loop_text = "🔁 Loop ON" if state.loop else "🔁 Loop OFF"
-
+    pp = ("▶️ Resume", "q_resume") if state.is_paused else ("⏸ Pause", "q_pause")
+    lp = "🔁 Loop ON" if state.loop else "🔁 Loop OFF"
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(pause_text, callback_data=pause_cb),
-            InlineKeyboardButton("⏭ Skip", callback_data="q_skip"),
-        ],
-        [
-            InlineKeyboardButton(loop_text, callback_data="q_loop"),
-            InlineKeyboardButton("🔀 Shuffle", callback_data="q_shuffle"),
-        ],
-        [
-            InlineKeyboardButton("📊 Queue", callback_data="q_queue"),
-            InlineKeyboardButton("🎛 Sound", callback_data="q_dsp"),
-        ],
-        [
-            InlineKeyboardButton("🗑 Remove Next", callback_data="q_remove"),
-            InlineKeyboardButton("📜 Lyrics", callback_data="q_lyrics"),
-        ],
-        [
-            InlineKeyboardButton("🛑 Stop & Leave", callback_data="q_stop"),
-        ],
-        [
-            InlineKeyboardButton("👑 Owner — @stillrahul", url="https://t.me/stillrahul"),
-        ],
+        [InlineKeyboardButton(pp[0], callback_data=pp[1]),
+         InlineKeyboardButton("⏭ Skip", callback_data="q_skip")],
+        [InlineKeyboardButton(lp, callback_data="q_loop"),
+         InlineKeyboardButton("🔀 Shuffle", callback_data="q_shuffle")],
+        [InlineKeyboardButton("📊 Queue", callback_data="q_queue"),
+         InlineKeyboardButton("🎛 Sound", callback_data="q_dsp")],
+        [InlineKeyboardButton("🗑 Remove", callback_data="q_remove"),
+         InlineKeyboardButton("📜 Lyrics", callback_data="q_lyrics")],
+        [InlineKeyboardButton("🛑 Stop", callback_data="q_stop")],
+        [InlineKeyboardButton("👑 @stillrahul", url="https://t.me/stillrahul")],
     ])
 
 
 # ==============================================================================
 # Stream Core
 # ==============================================================================
-async def execute_stream(chat_id: int, track: Track):
+async def execute_stream(cid: int, track: Track):
     await calls.play(
-        chat_id,
+        cid,
         MediaStream(
             track.url,
             audio_parameters=AudioQuality.STUDIO,
@@ -495,60 +500,96 @@ async def execute_stream(chat_id: int, track: Track):
     )
 
 
-async def send_now_playing(chat_id: int, state: ChatState):
+async def send_np(cid: int, state: ChatState):
     if not state.current:
         return
-    item = state.current
-    caption = quantum_ui_card(item.track, item.requested_by, state, chat_id)
+    it = state.current
+    cap = now_playing_card(it.track, it.requested_by, state, cid)
     try:
         msg = await bot.send_photo(
-            chat_id,
-            photo=item.track.thumb or DEFAULT_THUMB,
-            caption=caption,
-            reply_markup=get_buttons(state),
+            cid, photo=it.track.thumb or DEFAULT_THUMB,
+            caption=cap, reply_markup=get_buttons(state),
         )
-        NOW_PLAYING_MSG[chat_id] = msg.id
-    except Exception as e:
-        logger.warning(f"send_photo failed: {e}")
+        NOW_PLAYING_MSG[cid] = msg.id
+    except Exception:
         try:
             msg = await bot.send_message(
-                chat_id,
-                caption,
-                reply_markup=get_buttons(state),
+                cid, cap, reply_markup=get_buttons(state),
             )
-            NOW_PLAYING_MSG[chat_id] = msg.id
-        except Exception as e2:
-            logger.error(f"send_message also failed: {e2}")
+            NOW_PLAYING_MSG[cid] = msg.id
+        except Exception as e:
+            logger.error(f"send_np error: {e}")
 
 
-async def advance_queue(chat_id: int):
-    next_item = queues.next(chat_id)
-    if next_item is None:
+async def advance(cid: int):
+    nxt = queues.next(cid)
+    if not nxt:
         try:
-            await calls.leave_call(chat_id)
+            await calls.leave_call(cid)
         except Exception:
             pass
-        NOW_PLAYING_MSG.pop(chat_id, None)
+        NOW_PLAYING_MSG.pop(cid, None)
         return
-
     try:
-        await execute_stream(chat_id, next_item.track)
-        state = queues.get(chat_id)
-        await send_now_playing(chat_id, state)
+        await execute_stream(cid, nxt.track)
+        await send_np(cid, queues.get(cid))
     except Exception as e:
-        logger.warning(f"advance_queue error [{chat_id}]: {e}")
-        state = queues.get(chat_id)
-        state.loop = False
+        logger.warning(f"advance error: {e}")
+        queues.get(cid).loop = False
         await asyncio.sleep(1)
-        await advance_queue(chat_id)
+        await advance(cid)
 
 
 @calls.on_update()
-async def on_stream_update(_, update):
+async def on_stream_end(_, update):
     name = type(update).__name__
-    chat_id = getattr(update, "chat_id", None)
-    if name in {"StreamEnded", "StreamEndedUpdate", "UpdatedStreamEnded"} and chat_id:
-        await advance_queue(chat_id)
+    cid = getattr(update, "chat_id", None)
+    if name in {"StreamEnded", "StreamEndedUpdate", "UpdatedStreamEnded"} and cid:
+        await advance(cid)
+
+
+# ==============================================================================
+# Play helper
+# ==============================================================================
+async def _play_track(chat_id: int, query: str, requester: str, status_msg):
+    track = await resolve_track(query)
+
+    if not track:
+        return await status_msg.edit_text(
+            "❌ <b>Track not found!</b>\n\n"
+            "• Fresh cookies.txt export karo\n"
+            "• Video available hona chahiye\n"
+            "• Try: <code>/play song name</code>"
+        )
+
+    added, pos = queues.add(chat_id, track, requester)
+    if not added:
+        return await status_msg.edit_text("⚠️ <b>Queue full!</b>")
+
+    state = queues.get(chat_id)
+
+    if pos == 0:
+        try:
+            await execute_stream(chat_id, track)
+            await send_np(chat_id, state)
+            await status_msg.delete()
+        except NoActiveGroupCall:
+            queues.clear(chat_id)
+            await status_msg.edit_text(
+                "❌ <b>Voice Chat start karo pehle!</b>"
+            )
+        except Exception as e:
+            queues.clear(chat_id)
+            await status_msg.edit_text(
+                f"❌ <b>Error:</b> <code>{str(e)[:200]}</code>"
+            )
+    else:
+        await status_msg.edit_text(
+            f"📥 <b>Queued!</b>\n"
+            f"🎵 {track.title}\n"
+            f"👤 {track.artist}\n"
+            f"🔢 Position: #{pos}"
+        )
 
 
 # ==============================================================================
@@ -560,290 +601,182 @@ async def cmd_play(_, message: Message):
         return await message.reply_text(
             "🎵 <b>Usage:</b>\n"
             "<code>/play song name</code>\n"
-            "<code>/play YouTube URL</code>\n\n"
-            "Example: <code>/play kesariya</code>"
+            "<code>/play YouTube URL</code>"
         )
-
     query = message.text.split(None, 1)[1].strip()
-    chat_id = message.chat.id
-    requester = display_name(message)
-
-    status = await message.reply_text("⚡ <b>Fetching from YouTube HQ...</b>")
-    track = await resolve_track(query)
-
-    if not track:
-        return await status.edit_text(
-            "❌ <b>YouTube fetch failed!</b>\n\n"
-            "<b>Possible reasons:</b>\n"
-            "• cookies.txt expired — export fresh cookies\n"
-            "• Video private or region blocked\n"
-            "• Invalid URL\n\n"
-            "Try: <code>/play song name</code>"
-        )
-
-    added, position = queues.add(chat_id, track, requester)
-    if not added:
-        return await status.edit_text("⚠️ <b>Queue full!</b>")
-
-    state = queues.get(chat_id)
-
-    if position == 0:
-        try:
-            await execute_stream(chat_id, track)
-            await send_now_playing(chat_id, state)
-            await status.delete()
-        except NoActiveGroupCall:
-            queues.clear(chat_id)
-            await status.edit_text(
-                "❌ <b>No Voice Chat active!</b>\n"
-                "Start Voice Chat in group first, then /play."
-            )
-        except Exception as e:
-            queues.clear(chat_id)
-            logger.exception(f"Stream start error: {e}")
-            await status.edit_text(
-                f"❌ <b>Stream failed:</b>\n<code>{str(e)[:200]}</code>"
-            )
-    else:
-        await status.edit_text(
-            f"📥 <b>Added to Queue!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🎵 <b>Track:</b> {track.title}\n"
-            f"👤 <b>Artist:</b> {track.artist}\n"
-            f"🔢 <b>Position:</b> #{position}\n"
-            f"🎧 <b>By:</b> {requester}"
-        )
+    status = await message.reply_text("⚡ <b>Fetching...</b>")
+    await _play_track(message.chat.id, query, display_name(message), status)
 
 
 @bot.on_message(filters.command(["aiplay", "ai"]) & filters.group)
-async def cmd_ai_play(_, message: Message):
+async def cmd_ai(_, message: Message):
     if len(message.command) < 2:
         return await message.reply_text(
-            "🤖 <b>Usage:</b> <code>/aiplay mood</code>\n\n"
-            "<b>Moods:</b> sad, party, gym, lofi, romantic, devotional, 90s\n"
-            "Example: <code>/aiplay sad vibe</code>"
+            "🤖 <code>/aiplay mood</code>\n"
+            "Moods: sad party gym lofi romantic devotional 90s"
         )
-
     prompt = message.text.split(None, 1)[1].strip()
     suggested = analyze_vibe_prompt(prompt)
-    chat_id = message.chat.id
-    requester = f"🤖 AI ({display_name(message)})"
-
     status = await message.reply_text(
-        f"🧠 <b>AI Mood Match:</b> <code>{suggested}</code>\n"
-        f"⚡ <b>Fetching from YouTube HQ...</b>"
+        f"🧠 <b>AI:</b> <code>{suggested}</code>\n⚡ Fetching..."
     )
-
-    track = await resolve_track(suggested)
-
-    if not track:
-        return await status.edit_text("❌ <b>AI track fetch failed. Try again!</b>")
-
-    added, position = queues.add(chat_id, track, requester)
-    if not added:
-        return await status.edit_text("⚠️ <b>Queue full!</b>")
-
-    state = queues.get(chat_id)
-
-    if position == 0:
-        try:
-            await execute_stream(chat_id, track)
-            await send_now_playing(chat_id, state)
-            await status.delete()
-        except NoActiveGroupCall:
-            queues.clear(chat_id)
-            await status.edit_text("❌ <b>Start Voice Chat first!</b>")
-        except Exception as e:
-            queues.clear(chat_id)
-            await status.edit_text(f"❌ <b>Stream failed:</b> <code>{e}</code>")
-    else:
-        await status.edit_text(
-            f"🤖 <b>AI Queued:</b> {track.title} at #{position}"
-        )
+    await _play_track(
+        message.chat.id, suggested,
+        f"🤖 AI ({display_name(message)})", status,
+    )
 
 
 @bot.on_message(filters.command(["skip", "s"]) & filters.group)
-async def cmd_skip(_, message: Message):
-    chat_id = message.chat.id
-    state = queues.get(chat_id)
-    if not state.is_playing or not state.current:
-        return await message.reply_text("❌ <b>Nothing is playing!</b>")
-    state.loop = False
-    await message.reply_text("⏭ <b>Skipping...</b>")
-    await advance_queue(chat_id)
+async def cmd_skip(_, msg: Message):
+    s = queues.get(msg.chat.id)
+    if not s.is_playing:
+        return await msg.reply_text("❌ Nothing playing!")
+    s.loop = False
+    await msg.reply_text("⏭ Skipping...")
+    await advance(msg.chat.id)
 
 
 @bot.on_message(filters.command(["stop", "end"]) & filters.group)
-async def cmd_stop(_, message: Message):
-    chat_id = message.chat.id
-    queues.clear(chat_id)
+async def cmd_stop(_, msg: Message):
+    queues.clear(msg.chat.id)
     try:
-        await calls.leave_call(chat_id)
+        await calls.leave_call(msg.chat.id)
     except Exception:
         pass
-    NOW_PLAYING_MSG.pop(chat_id, None)
-    await message.reply_text("🛑 <b>Stopped. Queue cleared.</b>")
+    NOW_PLAYING_MSG.pop(msg.chat.id, None)
+    await msg.reply_text("🛑 Stopped!")
 
 
 @bot.on_message(filters.command("pause") & filters.group)
-async def cmd_pause(_, message: Message):
-    chat_id = message.chat.id
-    state = queues.get(chat_id)
-    if not state.is_playing or state.is_paused:
-        return await message.reply_text("❌ <b>Nothing to pause!</b>")
-    await calls.pause_stream(chat_id)
-    state.is_paused = True
-    await message.reply_text("⏸ <b>Paused!</b>")
+async def cmd_pause(_, msg: Message):
+    s = queues.get(msg.chat.id)
+    if not s.is_playing or s.is_paused:
+        return await msg.reply_text("❌ Nothing to pause!")
+    await calls.pause_stream(msg.chat.id)
+    s.is_paused = True
+    await msg.reply_text("⏸ Paused!")
 
 
 @bot.on_message(filters.command("resume") & filters.group)
-async def cmd_resume(_, message: Message):
-    chat_id = message.chat.id
-    state = queues.get(chat_id)
-    if not state.is_paused:
-        return await message.reply_text("❌ <b>Nothing to resume!</b>")
-    await calls.resume_stream(chat_id)
-    state.is_paused = False
-    await message.reply_text("▶️ <b>Resumed!</b>")
+async def cmd_resume(_, msg: Message):
+    s = queues.get(msg.chat.id)
+    if not s.is_paused:
+        return await msg.reply_text("❌ Not paused!")
+    await calls.resume_stream(msg.chat.id)
+    s.is_paused = False
+    await msg.reply_text("▶️ Resumed!")
 
 
 @bot.on_message(filters.command("loop") & filters.group)
-async def cmd_loop(_, message: Message):
-    chat_id = message.chat.id
-    state = queues.get(chat_id)
-    if not state.is_playing:
-        return await message.reply_text("❌ <b>Nothing playing!</b>")
-    state.loop = not state.loop
-    await message.reply_text(
-        f"🔁 <b>Loop:</b> {'ON ✅' if state.loop else 'OFF ❌'}"
-    )
+async def cmd_loop(_, msg: Message):
+    s = queues.get(msg.chat.id)
+    if not s.is_playing:
+        return await msg.reply_text("❌ Nothing playing!")
+    s.loop = not s.loop
+    await msg.reply_text(f"🔁 Loop: {'ON ✅' if s.loop else 'OFF ❌'}")
 
 
 @bot.on_message(filters.command(["queue", "q"]) & filters.group)
-async def cmd_queue(_, message: Message):
-    chat_id = message.chat.id
-    state = queues.get(chat_id)
-    if not state.current and not state.queue:
-        return await message.reply_text("📋 <b>Queue is empty!</b>")
-
-    lines = ["<b>📋 CURRENT QUEUE</b>\n━━━━━━━━━━━━━━━━━━━━"]
-    if state.current:
-        lines.append(
-            f"▶️ <b>Playing:</b> {state.current.track.title}\n"
-            f"   🎧 {state.current.requested_by}"
-        )
-    if state.queue:
+async def cmd_queue(_, msg: Message):
+    s = queues.get(msg.chat.id)
+    if not s.current and not s.queue:
+        return await msg.reply_text("📋 Queue empty!")
+    lines = ["<b>📋 QUEUE</b>\n━━━━━━━━━━━━━━━"]
+    if s.current:
+        lines.append(f"▶️ <b>Playing:</b> {s.current.track.title}")
+    if s.queue:
         lines.append("\n<b>Up Next:</b>")
-        for idx, item in enumerate(state.queue[:10], 1):
-            lines.append(f"<b>{idx}.</b> {item.track.title} — {item.requested_by}")
-        if len(state.queue) > 10:
-            lines.append(f"\n<i>...and {len(state.queue) - 10} more</i>")
-
-    await message.reply_text("\n".join(lines))
+        for i, item in enumerate(s.queue[:10], 1):
+            lines.append(f"<b>{i}.</b> {item.track.title}")
+        if len(s.queue) > 10:
+            lines.append(f"<i>...+{len(s.queue) - 10} more</i>")
+    await msg.reply_text("\n".join(lines))
 
 
 @bot.on_message(filters.command("shuffle") & filters.group)
-async def cmd_shuffle(_, message: Message):
-    chat_id = message.chat.id
-    state = queues.get(chat_id)
-    if not state.queue:
-        return await message.reply_text("❌ <b>Queue is empty!</b>")
-    queues.shuffle(chat_id)
-    await message.reply_text("🔀 <b>Queue shuffled!</b>")
+async def cmd_shuffle(_, msg: Message):
+    s = queues.get(msg.chat.id)
+    if not s.queue:
+        return await msg.reply_text("❌ Queue empty!")
+    queues.shuffle(msg.chat.id)
+    await msg.reply_text("🔀 Shuffled!")
 
 
 @bot.on_message(filters.command(["remove", "rm"]) & filters.group)
-async def cmd_remove(_, message: Message):
-    chat_id = message.chat.id
-    if len(message.command) < 2:
-        return await message.reply_text(
-            "Usage: <code>/remove position</code>\n"
-            "Example: <code>/remove 2</code>"
-        )
+async def cmd_remove(_, msg: Message):
+    if len(msg.command) < 2:
+        return await msg.reply_text("<code>/remove position</code>")
     try:
-        pos = int(message.command[1])
+        pos = int(msg.command[1])
     except ValueError:
-        return await message.reply_text("❌ <b>Invalid number!</b>")
-
-    item = queues.remove_at(chat_id, pos)
+        return await msg.reply_text("❌ Invalid number!")
+    item = queues.remove_at(msg.chat.id, pos)
     if item:
-        await message.reply_text(f"🗑 <b>Removed:</b> {item.track.title}")
+        await msg.reply_text(f"🗑 Removed: {item.track.title}")
     else:
-        await message.reply_text(f"❌ <b>No track at position #{pos}</b>")
+        await msg.reply_text(f"❌ No track at #{pos}")
 
 
 @bot.on_message(filters.command(["np", "now"]) & filters.group)
-async def cmd_now_playing(_, message: Message):
-    chat_id = message.chat.id
-    state = queues.get(chat_id)
-    if not state.current:
-        return await message.reply_text("❌ <b>Nothing is playing!</b>")
-    await send_now_playing(chat_id, state)
+async def cmd_np(_, msg: Message):
+    s = queues.get(msg.chat.id)
+    if not s.current:
+        return await msg.reply_text("❌ Nothing playing!")
+    await send_np(msg.chat.id, s)
 
 
 @bot.on_message(filters.command("cookies"))
-async def cmd_cookies(_, message: Message):
-    status_text = "✅ Found" if COOKIES_PATH else "❌ Not Found"
-    path = COOKIES_PATH or "None"
-    await message.reply_text(
-        f"🍪 <b>Cookies Status:</b> {status_text}\n"
-        f"📁 <b>Path:</b> <code>{path}</code>\n\n"
-        f"Cookies expire hoti hain — fresh export karo YouTube se."
+async def cmd_cookies(_, msg: Message):
+    await msg.reply_text(
+        f"🍪 <b>Status:</b> {'✅' if COOKIES_PATH else '❌'}\n"
+        f"📁 <b>Path:</b> <code>{COOKIES_PATH or 'None'}</code>"
     )
 
 
 @bot.on_message(filters.command("reloadcookies"))
-async def cmd_reload_cookies(_, message: Message):
-    if not is_owner(message):
-        return await message.reply_text("❌ <b>Only owner can use this!</b>")
-    path = find_cookies()
-    await message.reply_text(
-        f"🔄 <b>Cookies reloaded!</b>\n"
-        f"Status: {'✅ Found' if path else '❌ Not Found'}\n"
-        f"Path: <code>{path or 'None'}</code>"
+async def cmd_reload(_, msg: Message):
+    if not is_owner(msg):
+        return await msg.reply_text("❌ Owner only!")
+    p = find_cookies()
+    await msg.reply_text(
+        f"🔄 Reloaded!\n{'✅' if p else '❌'} {p or 'Not found'}"
     )
 
 
 @bot.on_message(filters.command("ping"))
-async def cmd_ping(_, message: Message):
-    start = asyncio.get_event_loop().time()
-    msg = await message.reply_text("🏓 Pinging...")
-    end = asyncio.get_event_loop().time()
-    await msg.edit_text(
-        f"🏓 <b>Pong!</b>\n"
-        f"⚡ <b>Latency:</b> <code>{round((end - start) * 1000, 2)} ms</code>\n"
-        f"🍪 <b>Cookies:</b> {'✅' if COOKIES_PATH else '❌'}\n"
-        f"🎵 <b>Saavn Fallback:</b> {'ON' if ENABLE_SAAVN_FALLBACK else 'OFF'}"
+async def cmd_ping(_, msg: Message):
+    t1 = asyncio.get_event_loop().time()
+    m = await msg.reply_text("🏓...")
+    t2 = asyncio.get_event_loop().time()
+    await m.edit_text(
+        f"🏓 <b>Pong!</b> <code>{round((t2-t1)*1000,2)}ms</code>\n"
+        f"🍪 Cookies: {'✅' if COOKIES_PATH else '❌'}"
     )
 
 
 @bot.on_message(filters.command("help"))
-async def cmd_help(_, message: Message):
-    await message.reply_text(
+async def cmd_help(_, msg: Message):
+    await msg.reply_text(
         "<b>⚡ FastTrack VC Music Bot</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         "<b>🎬 Playback</b>\n"
-        "/play [song/URL] — Play from YouTube HQ\n"
-        "/aiplay [mood] — AI mood-based play\n"
-        "/pause — Pause stream\n"
-        "/resume — Resume stream\n"
-        "/skip — Skip current track\n"
-        "/stop — Stop & leave VC\n"
+        "/play — Play song/URL\n"
+        "/aiplay — AI mood play\n"
+        "/pause — Pause\n"
+        "/resume — Resume\n"
+        "/skip — Skip\n"
+        "/stop — Stop & leave\n"
         "/loop — Toggle loop\n"
-        "/np — Now playing info\n\n"
+        "/np — Now playing\n\n"
         "<b>📋 Queue</b>\n"
         "/queue — View queue\n"
-        "/shuffle — Shuffle queue\n"
-        "/remove [pos] — Remove track\n\n"
+        "/shuffle — Shuffle\n"
+        "/remove — Remove track\n\n"
         "<b>🛠 Tools</b>\n"
         "/ping — Bot status\n"
-        "/cookies — Cookies status\n"
-        "/reloadcookies — Reload cookies\n\n"
-        "<b>🤖 AI Moods:</b>\n"
-        "sad • party • gym • lofi\n"
-        "romantic • devotional • 90s\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "👑 <b>Owner:</b> @stillrahul",
+        "/cookies — Check cookies\n"
+        "/reloadcookies — Reload\n\n"
+        "👑 Owner: @stillrahul",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("👑 Owner", url="https://t.me/stillrahul")
         ]])
@@ -851,13 +784,11 @@ async def cmd_help(_, message: Message):
 
 
 @bot.on_message(filters.command("start"))
-async def cmd_start(_, message: Message):
-    await message.reply_text(
+async def cmd_start(_, msg: Message):
+    await msg.reply_text(
         "<b>⚡ FastTrack VC Music Bot</b>\n\n"
-        "Group mein add karo, Voice Chat start karo, phir:\n"
-        "<code>/play song name</code>\n\n"
-        "/help — All commands\n\n"
-        "👑 Owner: @stillrahul",
+        "Group me add karo → VC start karo → /play\n\n"
+        "👑 @stillrahul",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("👑 Owner", url="https://t.me/stillrahul"),
             InlineKeyboardButton("📖 Help", callback_data="show_help"),
@@ -869,195 +800,169 @@ async def cmd_start(_, message: Message):
 # Callbacks
 # ==============================================================================
 @bot.on_callback_query(filters.regex(r"^q_|^show_help$"))
-async def handle_callbacks(_, query: CallbackQuery):
-    action = query.data
-    chat_id = query.message.chat.id
+async def cb_handler(_, q: CallbackQuery):
+    a = q.data
+    cid = q.message.chat.id
 
-    if action == "show_help":
-        return await query.answer("Use /help in group!", show_alert=True)
+    if a == "show_help":
+        return await q.answer("Use /help in group!", show_alert=True)
 
-    state = queues.get(chat_id)
+    s = queues.get(cid)
 
     try:
-        if action == "q_pause":
-            if not state.is_playing or state.is_paused:
-                return await query.answer("Nothing to pause!", show_alert=True)
-            await calls.pause_stream(chat_id)
-            state.is_paused = True
-            await query.message.edit_reply_markup(reply_markup=get_buttons(state))
-            await query.answer("⏸ Paused")
+        if a == "q_pause":
+            if not s.is_playing or s.is_paused:
+                return await q.answer("Nothing to pause!", show_alert=True)
+            await calls.pause_stream(cid)
+            s.is_paused = True
+            await q.message.edit_reply_markup(get_buttons(s))
+            await q.answer("⏸ Paused")
 
-        elif action == "q_resume":
-            if not state.is_paused:
-                return await query.answer("Already playing!", show_alert=True)
-            await calls.resume_stream(chat_id)
-            state.is_paused = False
-            await query.message.edit_reply_markup(reply_markup=get_buttons(state))
-            await query.answer("▶️ Resumed")
+        elif a == "q_resume":
+            if not s.is_paused:
+                return await q.answer("Already playing!", show_alert=True)
+            await calls.resume_stream(cid)
+            s.is_paused = False
+            await q.message.edit_reply_markup(get_buttons(s))
+            await q.answer("▶️ Resumed")
 
-        elif action == "q_skip":
-            if not state.is_playing or not state.current:
-                return await query.answer("Nothing playing!", show_alert=True)
-            state.loop = False
-            await query.answer("⏭ Skipping...")
+        elif a == "q_skip":
+            if not s.is_playing:
+                return await q.answer("Nothing!", show_alert=True)
+            s.loop = False
+            await q.answer("⏭ Skipping...")
             try:
-                await query.message.delete()
+                await q.message.delete()
             except Exception:
                 pass
-            await advance_queue(chat_id)
+            await advance(cid)
 
-        elif action == "q_loop":
-            if not state.is_playing:
-                return await query.answer("Nothing playing!", show_alert=True)
-            state.loop = not state.loop
-            if state.current:
-                caption = quantum_ui_card(
-                    state.current.track,
-                    state.current.requested_by,
-                    state,
-                    chat_id,
-                )
+        elif a == "q_loop":
+            if not s.is_playing:
+                return await q.answer("Nothing!", show_alert=True)
+            s.loop = not s.loop
+            if s.current:
+                cap = now_playing_card(s.current.track, s.current.requested_by, s, cid)
                 try:
-                    await query.message.edit_caption(
-                        caption=caption,
-                        reply_markup=get_buttons(state),
-                    )
+                    await q.message.edit_caption(caption=cap, reply_markup=get_buttons(s))
                 except Exception:
                     pass
-            await query.answer(f"Loop {'ON ✅' if state.loop else 'OFF ❌'}")
+            await q.answer(f"Loop {'ON' if s.loop else 'OFF'}")
 
-        elif action == "q_shuffle":
-            if not state.queue:
-                return await query.answer("Queue empty!", show_alert=True)
-            queues.shuffle(chat_id)
-            await query.answer("🔀 Shuffled!")
+        elif a == "q_shuffle":
+            if not s.queue:
+                return await q.answer("Queue empty!", show_alert=True)
+            queues.shuffle(cid)
+            await q.answer("🔀 Shuffled!")
 
-        elif action == "q_queue":
-            if not state.current and not state.queue:
-                return await query.answer("Queue empty!", show_alert=True)
-            lines = ["📋 QUEUE\n━━━━━━━━━━━━━━━"]
-            if state.current:
-                lines.append(f"▶️ {state.current.track.title}")
-            for i, item in enumerate(state.queue[:7], 1):
+        elif a == "q_queue":
+            if not s.current and not s.queue:
+                return await q.answer("Empty!", show_alert=True)
+            lines = []
+            if s.current:
+                lines.append(f"▶️ {s.current.track.title}")
+            for i, item in enumerate(s.queue[:7], 1):
                 lines.append(f"{i}. {item.track.title}")
-            if len(state.queue) > 7:
-                lines.append(f"...+{len(state.queue) - 7} more")
-            await query.answer("\n".join(lines), show_alert=True)
+            if len(s.queue) > 7:
+                lines.append(f"...+{len(s.queue)-7}")
+            await q.answer("\n".join(lines), show_alert=True)
 
-        elif action == "q_dsp":
-            if not state.is_playing:
-                return await query.answer("Play a track first!", show_alert=True)
-            profiles = [
-                "🌌 Pure HQ",
-                "🔥 Bass Boost",
-                "🎧 Studio Mode",
-                "🌊 Crystal Treble",
-                "🛸 8D Space",
-            ]
-            current = DSP_MATRIX.get(chat_id, profiles[0])
-            next_idx = (
-                (profiles.index(current) + 1) % len(profiles)
-                if current in profiles else 0
-            )
-            DSP_MATRIX[chat_id] = profiles[next_idx]
-            if state.current:
-                caption = quantum_ui_card(
-                    state.current.track,
-                    state.current.requested_by,
-                    state,
-                    chat_id,
-                )
+        elif a == "q_dsp":
+            if not s.is_playing:
+                return await q.answer("Play first!", show_alert=True)
+            profiles = ["🌌 Pure HQ", "🔥 Bass", "🎧 Studio", "🌊 Treble", "🛸 8D"]
+            cur = DSP_MATRIX.get(cid, profiles[0])
+            nxt = (profiles.index(cur) + 1) % len(profiles) if cur in profiles else 0
+            DSP_MATRIX[cid] = profiles[nxt]
+            if s.current:
+                cap = now_playing_card(s.current.track, s.current.requested_by, s, cid)
                 try:
-                    await query.message.edit_caption(
-                        caption=caption,
-                        reply_markup=get_buttons(state),
-                    )
+                    await q.message.edit_caption(caption=cap, reply_markup=get_buttons(s))
                 except Exception:
                     pass
-            await query.answer(f"🎛 Sound: {profiles[next_idx]}", show_alert=True)
+            await q.answer(f"🎛 {profiles[nxt]}", show_alert=True)
 
-        elif action == "q_remove":
-            if not state.queue:
-                return await query.answer("Queue empty!", show_alert=True)
-            item = queues.remove_at(chat_id, 1)
-            if item:
-                await query.answer(f"🗑 Removed: {item.track.title}", show_alert=True)
-            else:
-                await query.answer("Nothing to remove!", show_alert=True)
-
-        elif action == "q_lyrics":
-            if not state.current:
-                return await query.answer("Nothing playing!", show_alert=True)
-            await query.answer("📜 Sending lyrics...")
-            await bot.send_message(
-                chat_id,
-                f"📜 <b>Lyrics:</b> {state.current.track.title}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<i>Lyrics feature coming soon!</i>\n"
-                f"<i>Enjoy HQ stream by @stillrahul</i>",
+        elif a == "q_remove":
+            if not s.queue:
+                return await q.answer("Empty!", show_alert=True)
+            item = queues.remove_at(cid, 1)
+            await q.answer(
+                f"🗑 Removed: {item.track.title}" if item else "Nothing!",
+                show_alert=True,
             )
 
-        elif action == "q_stop":
-            queues.clear(chat_id)
+        elif a == "q_lyrics":
+            if not s.current:
+                return await q.answer("Nothing!", show_alert=True)
+            await q.answer("📜 Sending...")
+            await bot.send_message(
+                cid,
+                f"📜 <b>{s.current.track.title}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<i>Lyrics coming soon! — @stillrahul</i>",
+            )
+
+        elif a == "q_stop":
+            queues.clear(cid)
             try:
-                await calls.leave_call(chat_id)
+                await calls.leave_call(cid)
             except Exception:
                 pass
             try:
-                await query.message.delete()
+                await q.message.delete()
             except Exception:
                 pass
-            NOW_PLAYING_MSG.pop(chat_id, None)
-            await query.answer("🛑 Stopped!")
+            NOW_PLAYING_MSG.pop(cid, None)
+            await q.answer("🛑 Stopped!")
 
     except Exception as e:
-        logger.exception(f"Callback error [{action}]: {e}")
-        await query.answer("❌ Error occurred!", show_alert=True)
+        logger.exception(f"CB error [{a}]: {e}")
+        await q.answer("❌ Error!", show_alert=True)
 
 
 # ==============================================================================
-# Watchdog — Auto leave idle VC
+# Watchdog
 # ==============================================================================
 async def watchdog():
     while True:
         await asyncio.sleep(30)
         try:
-            idle_seconds = getattr(config, "AUTO_LEAVE_SECONDS", 180)
-            idle_chats = queues.cleanup_idle(idle_seconds)
+            idle_chats = queues.cleanup_idle(
+                getattr(config, "AUTO_LEAVE_SECONDS", 180)
+            )
             for cid in idle_chats:
                 try:
                     await calls.leave_call(cid)
-                    logger.info(f"🔇 Auto-left idle VC: {cid}")
                 except Exception:
                     pass
                 queues.forget(cid)
                 NOW_PLAYING_MSG.pop(cid, None)
         except Exception as e:
-            logger.error(f"Watchdog error: {e}")
+            logger.error(f"Watchdog: {e}")
 
 
 # ==============================================================================
 # Boot
 # ==============================================================================
 async def boot():
-    print("=" * 65)
-    print("  ⚡ FastTrack VC Music Bot — YouTube HQ Edition")
+    print("=" * 60)
+    print("  ⚡ FastTrack VC Music — YouTube HQ Edition")
     print("  👑 Owner: @stillrahul")
-    print("=" * 65)
+    print("=" * 60)
 
     await assistant.start()
     await bot.start()
     await calls.start()
 
-    bot_me = await bot.get_me()
-    assistant_me = await assistant.get_me()
+    b = await bot.get_me()
+    a = await assistant.get_me()
 
-    print(f"\n🤖 Bot:        @{bot_me.username}")
-    print(f"🎵 Assistant:  {assistant_me.first_name} [{assistant_me.id}]")
-    print(f"🍪 Cookies:    {'✅ ' + str(COOKIES_PATH) if COOKIES_PATH else '❌ NOT FOUND'}")
-    print(f"🎬 YouTube:    PRIMARY (tv_embedded bypass)")
-    print(f"🎵 Saavn:      {'FALLBACK ON' if ENABLE_SAAVN_FALLBACK else 'FALLBACK OFF'}")
-    print("\n✅ Ready!\n")
+    print(f"\n🤖 Bot:       @{b.username}")
+    print(f"🎵 Assistant: {a.first_name} [{a.id}]")
+    print(f"🍪 Cookies:   {'✅ ' + str(COOKIES_PATH) if COOKIES_PATH else '❌'}")
+    print(f"🎬 YouTube:   PRIMARY (multi-strategy)")
+    print(f"🎵 Saavn:     AUTO FALLBACK")
+    print(f"\n✅ Ready!\n")
 
     asyncio.create_task(watchdog())
     await idle()
@@ -1071,18 +976,11 @@ def main():
         print("\nStopping...")
     finally:
         async def cleanup():
-            try:
-                await saavn.close()
-            except Exception:
-                pass
-            try:
-                await bot.stop()
-            except Exception:
-                pass
-            try:
-                await assistant.stop()
-            except Exception:
-                pass
+            for fn in [saavn.close, bot.stop, assistant.stop]:
+                try:
+                    await fn()
+                except Exception:
+                    pass
         try:
             loop.run_until_complete(cleanup())
         except Exception:
