@@ -1,6 +1,5 @@
 """
 queue_manager.py — Per-chat song queue + playback state.
-Enhanced with shuffle, remove, and idle cleanup.
 """
 
 import random
