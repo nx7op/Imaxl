@@ -2,7 +2,7 @@
 """
 ================================================================================
  ⚡ FastTrack VC Music Bot — Quantum AI Hybrid Edition (2026)
- Core Engine: JioSaavn Server Stream + YouTube High-Fidelity Hook (Cookie Bound)
+ Core Engine: JioSaavn Server Stream + YouTube High-Fidelity Hook (Anti-Bot Bypass)
  Exclusive Features: Semantic AI Mood Engine, Live Sound Space Matrix, Dynamic Queue
  Developer & System Architect: @stillrahul
 ================================================================================
@@ -68,7 +68,7 @@ DEFAULT_THUMB = "https://telegra.ph/file/default_music_thumb.jpg"
 DSP_MATRIX = {}      
 
 # ==============================================================================
-# AI Mood Matrix 
+# AI Mood Matrix (Semantic Engine)
 # ==============================================================================
 AI_MOOD_DATABASE = {
     "sad": ["dil ko karayan aaya", "tu jaane na", "channa mereya", "kabira", "agar tum sath ho"],
@@ -91,57 +91,47 @@ def analyze_vibe_prompt(prompt: str) -> str:
     return random.choice(all_seeds)
 
 # ==============================================================================
-# YouTube Engine: MULTI-LAYER FALLBACK MATRIX (The Ultimate Fix)
+# YouTube Engine: ULTIMATE ANTI-BOT BYPASS (Android Client Spoofing)
 # ==============================================================================
 class YoutubeEngine:
     @staticmethod
     def _extract(query: str) -> Optional[dict]:
-        base_opts = {
+        opts = {
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
             "quiet": True,
             "no_warnings": True,
             "default_search": "ytsearch1",
             "nocheckcertificate": True,
             "geo_bypass": True,
+            "noplaylist": True,
+            # 🚨 THE MAGIC TRICK: Makes YouTube think the request is from an Android Phone!
+            "extractor_args": {"youtube": ["client=android,ios"]}, 
         }
         
-        if os.path.exists("cookies.txt"):
-            base_opts["cookiefile"] = "cookies.txt"
-            logger.info("Secured Stream: Injecting cookies.txt authentication matrix.")
-
-        # 🚨 YAHAN HAI MAGIC: Agar pehla format fail hua toh agla try karega!
-        formats_to_try = [
-            "bestaudio[ext=m4a]/bestaudio/best/ba",  # #1: Best Case Scenario
-            "best",                                  # #2: Normal Video+Audio (PyTgCalls audio nikal lega)
-            "ba",                                    # #3: Basic Audio
-            "worst"                                  # #4: Aakhri rasta (Kuch toh play karo)
-        ]
-
-        for fmt in formats_to_try:
-            opts = base_opts.copy()
-            opts["format"] = fmt
-            try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(query, download=False)
-                    if "entries" in info:
-                        if not info["entries"]:
-                            continue
-                        info = info["entries"][0]
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(query, download=False)
+                if "entries" in info:
+                    if not info["entries"]: 
+                        return None
+                    info = info["entries"][0]
+                
+                if not info.get("url"):
+                    logger.warning("Extraction completed, but URL is hidden/blocked.")
+                    return None
                     
-                    if info.get("url"):
-                        logger.info(f"✅ Success with format: {fmt}")
-                        return info
-            except Exception as e:
-                logger.warning(f"⚠️ Format fallback [{fmt}] failed, trying next... Error: {e}")
-                continue # Fail hua toh crash nahi hoga, loop agla try karega!
-        
-        logger.error("❌ YouTube Engine Framework Crash: All fallbacks failed!")
-        return None
+                return info
+        except Exception as e:
+            logger.error(f"YouTube Engine Framework Crash: {e}")
+            return None
 
     @classmethod
     async def get_track(cls, query: str) -> Optional[Track]:
         info = await asyncio.to_thread(cls._extract, query)
+        
         if not info:
             return None
+            
         return Track(
             id_=info.get("id"),
             title=info.get("title", "Unknown Velocity Track")[:45],
@@ -165,7 +155,6 @@ def display_name(message: Message) -> str:
 def quantum_ui_card(track: Track, requested_by: str, state: ChatState, chat_id: int) -> str:
     loop_status = "🧬 Engaged" if state.loop else "❌ Dormant"
     current_dsp = DSP_MATRIX.get(chat_id, "🌌 Pure Linear Phase [HQ]")
-    
     dur = getattr(track, "duration_str", f"{track.duration}s")
     
     card = (
@@ -178,7 +167,7 @@ def quantum_ui_card(track: Track, requested_by: str, state: ChatState, chat_id: 
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"👑 <b>Architecture Lead & Owner:</b> @stillrahul\n"
         f"🎧 <b>Pilot:</b> {requested_by} | 🔁 <b>Loop:</b> {loop_status}\n\n"
-        f"✨ <i>FastTrack VC Music Bot</i>"
+        f"✨ <i>FastTrack VC Music System</i>"
     )
     return card
 
@@ -213,7 +202,6 @@ def get_quantum_buttons(state: ChatState) -> InlineKeyboardMarkup:
 # Engine Core Mechanics
 # ==============================================================================
 async def _execute_stream(chat_id: int, track: Track):
-    # video_flags=MediaStream.Flags.IGNORE ensures ki agar fallback video utha le, toh bhi lag na aaye
     await calls.play(
         chat_id,
         MediaStream(
@@ -270,7 +258,7 @@ async def cmd_play(_, message: Message):
     is_youtube = "youtube.com" in query or "youtu.be" in query
 
     if is_youtube:
-        await status.edit_text("🔑 <b>Bypassing restrictions via Secure Auth Cookie...</b>")
+        await status.edit_text("🔑 <b>Bypassing restrictions via Android Subsystem Bypass...</b>")
         track = await YoutubeEngine.get_track(query)
     else:
         await status.edit_text(f"🔍 <b>Indexing JioSaavn Mainframe for:</b> <code>{query}</code>...")
@@ -313,7 +301,6 @@ async def cmd_play(_, message: Message):
             f"🔢 <b>Position:</b> #{position}\n"
             f"👤 <b>Pilot:</b> {requester}"
         )
-
 
 @bot.on_message(filters.command("aiplay") & filters.group)
 async def cmd_ai_play(_, message: Message):
