@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ⚡ IMAXL VC MUSIC BOT — Ultimate Edition v4.0 ⚡
+  ⚡ IMAXL VC MUSIC BOT — Ultimate Edition v4.1 ⚡
   Voice Chat Music | 4K Video | HQ Audio | Real FX | AI Smart
   Owner: @stillrahul
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -146,7 +146,7 @@ _VIDEO_Q_MAP = {
 _VIDEO_QUALITY = _VIDEO_Q_MAP.get(VIDEO_QUALITY, VideoQuality.FHD_1080p)
 
 # ═══════════════════════════════════════════════════
-# DSP EFFECTS — REAL FFMPEG FILTERS
+# DSP EFFECTS — REAL FFMPEG FILTERS  
 # ═══════════════════════════════════════════════════
 _DSP_FILTERS = {
     "standard": "",
@@ -385,7 +385,7 @@ saavn = SaavnClient()
 
 
 # ═══════════════════════════════════════════════════
-# YOUTUBE ENGINE — Multi-Strategy
+# YOUTUBE ENGINE — Multi-Strategy (FIXED)
 # ═══════════════════════════════════════════════════
 class YT:
     STRATEGIES = [
@@ -401,6 +401,7 @@ class YT:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.youtube.com/",
     }
 
     @classmethod
@@ -418,11 +419,13 @@ class YT:
             "cachedir": False,
             "source_address": "0.0.0.0",
             "http_headers": cls.HEADERS,
+            "headers": cls.HEADERS,
         }
         if strat.get("args"):
             o["extractor_args"] = strat["args"]
         if strat.get("cookies") and COOKIES_PATH:
             o["cookiefile"] = COOKIES_PATH
+            o["cookiesfrombrowser"] = None
         return o
 
     @classmethod
@@ -473,8 +476,9 @@ class YT:
         title = clean_html(info.get("title") or "Unknown")
         artist = clean_html(info.get("uploader") or "YouTube")
 
+        # FIX: id_ -> id (Track dataclass field name)
         return Track(
-            id_=info.get("id", ""),
+            id=info.get("id", ""),
             title=title,
             artist=artist,
             album="YouTube",
@@ -601,19 +605,28 @@ queues = QueueManager(max_queue_size=MAX_QUEUE_SIZE)
 # TRACK FINDER
 # ═══════════════════════════════════════════════════
 async def find_track(query: str, video: bool = False) -> Optional[Track]:
-    if not query.startswith("http"):
-        track = await saavn.get_first_result(query)
+    # YouTube URL direct
+    if "youtu" in query or query.startswith("http"):
+        track = await YT.track(query, video=video)
         if track:
             return track
+        # Fallback: try without video flag
+        if video:
+            track = await YT.track(query, video=False)
+            if track:
+                track.is_video = False
+                return track
+        return None
 
-    track = await YT.track(query, video=video)
+    # Saavn first for Indian songs (fast)
+    track = await saavn.get_first_result(query)
     if track:
         return track
 
-    if video:
-        track = await YT.track(query, video=True)
-        if track:
-            return track
+    # YouTube fallback
+    track = await YT.track(query, video=video)
+    if track:
+        return track
 
     return None
 
@@ -664,32 +677,45 @@ def _fallback_suggestions(count: int) -> list[str]:
 
 
 # ═══════════════════════════════════════════════════
-# STREAM CORE
+# STREAM CORE (FIXED FX)
 # ═══════════════════════════════════════════════════
 async def start_stream(cid: int, track: Track, video: bool = False):
     state = queues.get(cid)
     dsp = state.dsp_mode
 
-    ffmpeg_params = None
-    if dsp != "standard" and dsp in _DSP_FILTERS:
-        filter_chain = _DSP_FILTERS[dsp]
-        ffmpeg_params = f'-af "{filter_chain}"'
-        logger.info(f"🎛️ Applying FX: {dsp} -> {filter_chain}")
-
+    # Build MediaStream with proper ffmpeg parameters
     if video or track.is_video:
-        stream = MediaStream(
-            track.url,
-            audio_parameters=_AUDIO_QUALITY,
-            video_parameters=_VIDEO_QUALITY,
-            ffmpeg_parameters=ffmpeg_params,
-        )
+        if dsp != "standard" and dsp in _DSP_FILTERS and _DSP_FILTERS[dsp]:
+            ffmpeg_params = f"-af {_DSP_FILTERS[dsp]}"
+            logger.info(f"🎛️ FX [{dsp}]: {ffmpeg_params}")
+            stream = MediaStream(
+                track.url,
+                audio_parameters=_AUDIO_QUALITY,
+                video_parameters=_VIDEO_QUALITY,
+                ffmpeg_parameters=ffmpeg_params,
+            )
+        else:
+            stream = MediaStream(
+                track.url,
+                audio_parameters=_AUDIO_QUALITY,
+                video_parameters=_VIDEO_QUALITY,
+            )
     else:
-        stream = MediaStream(
-            track.url,
-            audio_parameters=_AUDIO_QUALITY,
-            video_flags=MediaStream.Flags.IGNORE,
-            ffmpeg_parameters=ffmpeg_params,
-        )
+        if dsp != "standard" and dsp in _DSP_FILTERS and _DSP_FILTERS[dsp]:
+            ffmpeg_params = f"-af {_DSP_FILTERS[dsp]}"
+            logger.info(f"🎛️ FX [{dsp}]: {ffmpeg_params}")
+            stream = MediaStream(
+                track.url,
+                audio_parameters=_AUDIO_QUALITY,
+                video_flags=MediaStream.Flags.IGNORE,
+                ffmpeg_parameters=ffmpeg_params,
+            )
+        else:
+            stream = MediaStream(
+                track.url,
+                audio_parameters=_AUDIO_QUALITY,
+                video_flags=MediaStream.Flags.IGNORE,
+            )
 
     await calls.play(cid, stream)
 
@@ -714,13 +740,17 @@ async def send_card(cid: int, state: ChatState, video: bool = False):
     status = "⏸️ Paused" if state.is_paused else "▶️ Playing"
     vol = state.volume
 
+    # Premium UI
     caption = (
+        f"━━━━━━━━━━━━━━━\n"
         f"🎶 <b>{track.title}</b>\n"
-        f"👤 {track.artist}\n\n"
+        f"👤 <i>{track.artist}</i>\n"
+        f"━━━━━━━━━━━━━━━\n"
         f"{src}  |  ⏱ {dur}  |  {status}\n"
-        f"🎛️ FX: {dsp_label}  |  🔊 Vol: {vol}%  |  📋 Queue: {q}\n\n"
-        f"👤 Requested by {item.requested_by}\n"
-        f"{OWNER_TAG}"
+        f"🎛️ FX: {dsp_label}  |  🔊 {vol}%  |  📋 {q}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👤 <i>Requested by {item.requested_by}</i>\n"
+        f"⚡ {OWNER_TAG}"
     )
 
     old = NOW_MSG.pop(cid, None)
@@ -819,7 +849,7 @@ async def on_end(_, update):
 # ═══════════════════════════════════════════════════
 def btns(state: ChatState) -> InlineKeyboardMarkup:
     pp = ("▶️ Resume", "q_resume") if state.is_paused else ("⏸️ Pause", "q_pause")
-    lp = "🔁 Loop On" if state.loop else "🔁 Loop"
+    lp = "🔁 Loop: ON" if state.loop else "🔁 Loop"
     ai = "🤖 AI: ON" if state.ai_autoplay else "🤖 AI: OFF"
 
     return InlineKeyboardMarkup([
@@ -839,8 +869,8 @@ def btns(state: ChatState) -> InlineKeyboardMarkup:
             InlineKeyboardButton("🗑️ Clear", callback_data="q_remove"),
         ],
         [
-            InlineKeyboardButton("🔊 Vol +", callback_data="q_vol_up"),
-            InlineKeyboardButton("🔉 Vol -", callback_data="q_vol_down"),
+            InlineKeyboardButton("🔊 Vol+", callback_data="q_vol_up"),
+            InlineKeyboardButton("🔉 Vol-", callback_data="q_vol_down"),
             InlineKeyboardButton("📊 Stats", callback_data="q_stats"),
         ],
     ])
@@ -861,7 +891,7 @@ def fx_btns(state: ChatState) -> InlineKeyboardMarkup:
 
 
 # ═══════════════════════════════════════════════════
-# PLAY HANDLER
+# PLAY HANDLER (FAST — no extra delays)
 # ═══════════════════════════════════════════════════
 async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False):
     asyncio.create_task(auto_del(msg))
@@ -872,14 +902,14 @@ async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False
     elapsed = round(time.time() - t0, 1)
 
     if not track:
-        await safe_edit(status, "❌ Not found. Try another song.")
+        await safe_edit(status, "❌ Not found. Try another song or URL.")
         await asyncio.sleep(3)
         await safe_del(status)
         return
 
     added, pos = queues.add(cid, track, by)
     if not added:
-        await safe_edit(status, "📛 Queue full.")
+        await safe_edit(status, "📛 Queue full (max 50).")
         await asyncio.sleep(2)
         await safe_del(status)
         return
@@ -900,7 +930,7 @@ async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False
             await asyncio.sleep(3)
             await safe_del(status)
     else:
-        await safe_edit(status, f"✅ Added #{pos} | ⏱ {elapsed}s")
+        await safe_edit(status, f"✅ Added #{pos} | ⏱ {elapsed}s | {track.title[:30]}")
         await asyncio.sleep(2)
         await safe_del(status)
 
@@ -911,18 +941,21 @@ async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
     await msg.reply_text(
-        "🎵 <b>IMAXL VC Music Bot</b>\n\n"
+        "╔═══════════════════════╗\n"
+        "║  🎵 <b>IMAXL VC MUSIC</b>  ║\n"
+        "╚═══════════════════════╝\n\n"
         "Add me to your group, start a voice chat,\n"
         "and play music with <code>/play song</code>\n\n"
         "<b>✨ Features:</b>\n"
-        "• 🎬 4K Video + HQ Audio\n"
+        "• 🎬 4K Video + Studio Audio\n"
         "• 🤖 AI Smart Suggestions\n"
-        "• 🎛️ Real FX: Slowed, Reverb, 8D, LoFi, BassBoost\n"
-        "• 📋 Auto Queue Fill\n"
-        "• ⚡ Ultra Fast — Seconds mein song!\n\n"
-        f"{OWNER_TAG}",
+        "• 🎛️ 9 Real FX: Slowed, Reverb, 8D, LoFi\n"
+        "• 📋 Auto Queue + Anti-Spam\n"
+        "• ⚡ Ultra Fast Playback\n\n"
+        f"⚡ {OWNER_TAG}",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("👤 Owner", url=f"https://t.me/{OWNER_USERNAME.lstrip('@')}"),
+            InlineKeyboardButton("📖 Help", callback_data="q_help"),
         ]])
     )
 
@@ -930,8 +963,8 @@ async def cmd_start(_, msg: Message):
 @bot.on_message(filters.command("play") & filters.group)
 async def cmd_play(_, msg: Message):
     if len(msg.command) < 2:
-        r = await msg.reply_text("Usage: <code>/play song name</code>")
-        await asyncio.sleep(3)
+        r = await msg.reply_text("🎵 <code>/play song name or URL</code>")
+        await asyncio.sleep(2)
         await safe_del(r)
         return
     query = " ".join(msg.command[1:])
@@ -941,8 +974,8 @@ async def cmd_play(_, msg: Message):
 @bot.on_message(filters.command("vplay") & filters.group)
 async def cmd_vplay(_, msg: Message):
     if len(msg.command) < 2:
-        r = await msg.reply_text("Usage: <code>/vplay song/URL</code>")
-        await asyncio.sleep(3)
+        r = await msg.reply_text("🎬 <code>/vplay song name or URL</code>")
+        await asyncio.sleep(2)
         await safe_del(r)
         return
     query = " ".join(msg.command[1:])
@@ -952,26 +985,26 @@ async def cmd_vplay(_, msg: Message):
 @bot.on_message(filters.command("aiplay") & filters.group)
 async def cmd_aiplay(_, msg: Message):
     if len(msg.command) < 2:
-        r = await msg.reply_text("Usage: <code>/aiplay mood</code> (e.g., sad, party, romantic)")
-        await asyncio.sleep(3)
+        r = await msg.reply_text("🤖 <code>/aiplay mood</code> — sad, party, romantic")
+        await asyncio.sleep(2)
         await safe_del(r)
         return
 
     asyncio.create_task(auto_del(msg))
     mood = " ".join(msg.command[1:])
     cid = msg.chat.id
-    status = await bot.send_message(cid, f"🤖 <b>AI thinking for '{mood}'...</b>")
+    status = await bot.send_message(cid, f"🤖 <b>AI finding '{mood}'...</b>")
 
     suggestions = await ai_suggest_songs(mood, count=5)
     if not suggestions:
         await safe_edit(status, "❌ AI failed. Try again.")
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         await safe_del(status)
         return
 
-    await safe_edit(status, f"✅ Found {len(suggestions)} songs. Playing first...")
+    await safe_edit(status, f"✅ Found {len(suggestions)} songs. Playing...")
 
-    for i, song in enumerate(suggestions):
+    for song in suggestions:
         track = await find_track(song, video=False)
         if track:
             added, pos = queues.add(cid, track, f"{uname(msg)} (AI)")
@@ -982,17 +1015,17 @@ async def cmd_aiplay(_, msg: Message):
                     await send_card(cid, queues.get(cid), False)
                     return
                 except NoActiveGroupCall:
-                    await safe_edit(status, "❌ Start a voice chat first!")
-                    await asyncio.sleep(4)
+                    await safe_edit(status, "❌ Start VC first!")
+                    await asyncio.sleep(3)
                     await safe_del(status)
                     queues.clear(cid)
                     return
             elif added:
-                await safe_edit(status, f"✅ Added #{pos}: {track.title[:30]}")
-                await asyncio.sleep(1)
+                await safe_edit(status, f"✅ #{pos}: {track.title[:25]}")
+                await asyncio.sleep(0.5)
 
-    await safe_edit(status, "✅ AI Queue filled!")
-    await asyncio.sleep(2)
+    await safe_edit(status, "✅ AI Queue ready!")
+    await asyncio.sleep(1)
     await safe_del(status)
 
 
@@ -1060,7 +1093,7 @@ async def cmd_fx(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     state = queues.get(msg.chat.id)
     r = await msg.reply_text("🎛️ <b>Select Audio Effect:</b>", reply_markup=fx_btns(state))
-    await asyncio.sleep(15)
+    await asyncio.sleep(20)
     await safe_del(r)
 
 
@@ -1075,24 +1108,24 @@ async def cmd_queue(_, msg: Message):
         await safe_del(r)
         return
 
-    lines = []
+    lines = ["╔══════ 📋 QUEUE ══════╗"]
     if state.current:
         dsp = _DSP_NAMES.get(state.dsp_mode, "Standard")
-        lines.append(f"▶️ Playing: {state.current.track.title}")
+        lines.append(f"▶️ NOW: {state.current.track.title[:35]}")
         lines.append(f"🎛️ FX: {dsp}")
     if state.queue:
-        lines.append("")
+        lines.append("╠══════ NEXT ══════╣")
         for i, item in enumerate(state.queue[:10], 1):
-            lines.append(f"{i}. {item.track.title}")
+            lines.append(f"{i}. {item.track.title[:35]}")
         if len(state.queue) > 10:
             lines.append(f"+{len(state.queue) - 10} more")
 
     ai_status = "🟢 ON" if state.ai_autoplay else "🔴 OFF"
-    lines.append(f"\n🤖 AI AutoPlay: {ai_status}")
-    lines.append(f"{OWNER_TAG}")
+    lines.append(f"╚══════ 🤖 AI: {ai_status} ══════╝")
+    lines.append(f"⚡ {OWNER_TAG}")
 
     r = await msg.reply_text("\n".join(lines))
-    await asyncio.sleep(8)
+    await asyncio.sleep(10)
     await safe_del(r)
 
 
@@ -1100,8 +1133,8 @@ async def cmd_queue(_, msg: Message):
 async def cmd_shuffle(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     queues.shuffle(msg.chat.id)
-    r = await msg.reply_text("🔀 Queue shuffled.")
-    await asyncio.sleep(2)
+    r = await msg.reply_text("🔀 Shuffled!")
+    await asyncio.sleep(1)
     await safe_del(r)
 
 
@@ -1111,7 +1144,11 @@ async def cmd_rm(_, msg: Message):
     if len(msg.command) < 2:
         return
     try:
-        queues.remove_at(msg.chat.id, int(msg.command[1]))
+        item = queues.remove_at(msg.chat.id, int(msg.command[1]))
+        if item:
+            r = await msg.reply_text(f"🗑️ Removed: {item.track.title[:30]}")
+            await asyncio.sleep(1)
+            await safe_del(r)
     except Exception:
         pass
 
@@ -1128,8 +1165,8 @@ async def cmd_np(_, msg: Message):
 async def cmd_autoplay(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     new_state = queues.toggle_ai(msg.chat.id)
-    status = "🟢 enabled" if new_state else "🔴 disabled"
-    r = await msg.reply_text(f"🤖 AI AutoPlay {status}.")
+    status = "🟢 ON" if new_state else "🔴 OFF"
+    r = await msg.reply_text(f"🤖 AI AutoPlay: {status}")
     await asyncio.sleep(2)
     await safe_del(r)
 
@@ -1138,7 +1175,7 @@ async def cmd_autoplay(_, msg: Message):
 async def cmd_volume(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     if len(msg.command) < 2:
-        r = await msg.reply_text("Usage: <code>/vol 1-200</code>")
+        r = await msg.reply_text("🔊 <code>/vol 1-200</code>")
         await asyncio.sleep(2)
         await safe_del(r)
         return
@@ -1148,8 +1185,8 @@ async def cmd_volume(_, msg: Message):
         state = queues.get(msg.chat.id)
         state.volume = vol
         await calls.change_volume_call(msg.chat.id, vol)
-        r = await msg.reply_text(f"🔊 Volume set to {vol}%")
-        await asyncio.sleep(2)
+        r = await msg.reply_text(f"🔊 Volume: {vol}%")
+        await asyncio.sleep(1)
         await safe_del(r)
     except Exception:
         pass
@@ -1170,10 +1207,10 @@ async def cmd_restart(_, msg: Message):
 async def cmd_ping(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     t1 = time.time()
-    r = await msg.reply_text("🏓 Pinging...")
+    r = await msg.reply_text("🏓 ...")
     t2 = time.time()
     ms = round((t2 - t1) * 1000)
-    await safe_edit(r, f"🏓 Ping: {ms}ms | {OWNER_TAG}")
+    await safe_edit(r, f"🏓 {ms}ms | ⚡ {OWNER_TAG}")
     await asyncio.sleep(3)
     await safe_del(r)
 
@@ -1183,7 +1220,7 @@ async def cmd_ck(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     found = "🟢 Yes" if COOKIES_PATH else "🔴 No"
     r = await msg.reply_text(f"🍪 Cookies: {found}")
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
     await safe_del(r)
 
 
@@ -1193,8 +1230,8 @@ async def cmd_rcook(_, msg: Message):
     if not is_sudo(msg):
         return
     find_cookies()
-    r = await msg.reply_text(f"🍪 Cookies reloaded: {'Yes' if COOKIES_PATH else 'No'}")
-    await asyncio.sleep(3)
+    r = await msg.reply_text(f"🍪 Reloaded: {'Yes' if COOKIES_PATH else 'No'}")
+    await asyncio.sleep(2)
     await safe_del(r)
 
 
@@ -1202,22 +1239,22 @@ async def cmd_rcook(_, msg: Message):
 async def cmd_help(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     r = await msg.reply_text(
-        "🎵 <b>IMAXL VC Music Bot</b>\n\n"
+        "╔══════ 🎵 IMAXL HELP ══════╗\n\n"
         "<b>🎵 Play</b>\n"
         "<code>/play song</code> — Audio\n"
-        "<code>/vplay song</code> — Video (4K/1080p)\n"
-        "<code>/aiplay mood</code> — AI suggestions\n\n"
+        "<code>/vplay song/URL</code> — Video 4K\n"
+        "<code>/aiplay mood</code> — AI pick\n\n"
         "<b>🎛️ Controls</b>\n"
         "<code>/pause /resume /skip /stop</code>\n"
         "<code>/loop /shuffle /fx</code>\n"
-        "<code>/vol 1-200</code> — Volume\n\n"
+        "<code>/vol 1-200</code>\n\n"
         "<b>📋 Queue</b>\n"
-        "<code>/queue /remove /np</code>\n"
-        "<code>/autoplay</code> — Toggle AI autoplay\n\n"
-        "<b>👑 Owner</b>\n"
-        f"{OWNER_TAG}",
+        "<code>/queue /remove index /np</code>\n"
+        "<code>/autoplay</code> — AI toggle\n\n"
+        "╚═══════════════════════╝\n"
+        f"⚡ {OWNER_TAG}",
     )
-    await asyncio.sleep(15)
+    await asyncio.sleep(20)
     await safe_del(r)
 
 
@@ -1233,7 +1270,7 @@ async def cb(_, q: CallbackQuery):
     try:
         if a == "q_pause":
             if not state.is_playing or state.is_paused:
-                return await q.answer("—")
+                return await q.answer("❌ Not playing")
             await calls.pause_stream(cid)
             state.is_paused = True
             await q.answer("⏸️ Paused")
@@ -1242,7 +1279,7 @@ async def cb(_, q: CallbackQuery):
 
         elif a == "q_resume":
             if not state.is_paused:
-                return await q.answer("—")
+                return await q.answer("❌ Not paused")
             await calls.resume_stream(cid)
             state.is_paused = False
             await q.answer("▶️ Resumed")
@@ -1251,7 +1288,7 @@ async def cb(_, q: CallbackQuery):
 
         elif a == "q_skip":
             if not state.is_playing:
-                return await q.answer("—")
+                return await q.answer("❌ Not playing")
             state.loop = False
             await q.answer("⏭️ Skipped")
             await advance(cid)
@@ -1268,15 +1305,15 @@ async def cb(_, q: CallbackQuery):
 
         elif a == "q_loop":
             if not state.is_playing:
-                return await q.answer("—")
+                return await q.answer("❌ Not playing")
             state.loop = not state.loop
-            await q.answer(f"🔁 Loop {'On' if state.loop else 'Off'}")
+            await q.answer(f"🔁 Loop {'ON' if state.loop else 'OFF'}")
             if state.current:
                 await send_card(cid, state)
 
         elif a == "q_shuffle":
             if not state.queue:
-                return await q.answer("Empty")
+                return await q.answer("📭 Empty")
             queues.shuffle(cid)
             await q.answer("🔀 Shuffled")
 
@@ -1290,7 +1327,7 @@ async def cb(_, q: CallbackQuery):
 
         elif a == "q_autotoggle":
             new_state = queues.toggle_ai(cid)
-            await q.answer(f"🤖 AI Auto {'On' if new_state else 'Off'}")
+            await q.answer(f"🤖 AI {'ON' if new_state else 'OFF'}")
             if state.current:
                 await send_card(cid, state)
 
@@ -1299,9 +1336,9 @@ async def cb(_, q: CallbackQuery):
                 return await q.answer("📭 Empty")
             lines = []
             if state.current:
-                lines.append(f"▶️ Now: {state.current.track.title}")
+                lines.append(f"▶️ {state.current.track.title[:30]}")
             for i, item in enumerate(state.queue[:8], 1):
-                lines.append(f"{i}. {item.track.title}")
+                lines.append(f"{i}. {item.track.title[:30]}")
             if len(state.queue) > 8:
                 lines.append(f"+{len(state.queue) - 8}")
             await q.answer("\n".join(lines), show_alert=True)
@@ -1310,7 +1347,7 @@ async def cb(_, q: CallbackQuery):
             if not state.queue:
                 return await q.answer("📭 Empty")
             item = queues.remove_at(cid, 1)
-            await q.answer(f"🗑️ Removed: {item.track.title[:30]}" if item else "—", show_alert=True)
+            await q.answer(f"🗑️ {item.track.title[:25]}" if item else "—", show_alert=True)
 
         elif a == "q_vol_up":
             new_vol = min(200, state.volume + 10)
@@ -1319,7 +1356,7 @@ async def cb(_, q: CallbackQuery):
                 await calls.change_volume_call(cid, new_vol)
             except Exception:
                 pass
-            await q.answer(f"🔊 Vol: {new_vol}%")
+            await q.answer(f"🔊 {new_vol}%")
             if state.current:
                 await send_card(cid, state)
 
@@ -1330,7 +1367,7 @@ async def cb(_, q: CallbackQuery):
                 await calls.change_volume_call(cid, new_vol)
             except Exception:
                 pass
-            await q.answer(f"🔉 Vol: {new_vol}%")
+            await q.answer(f"🔉 {new_vol}%")
             if state.current:
                 await send_card(cid, state)
 
@@ -1338,6 +1375,15 @@ async def cb(_, q: CallbackQuery):
             total = sum(1 for s in queues._chats.values() if s.is_playing)
             queued = sum(len(s.queue) for s in queues._chats.values())
             await q.answer(f"🎵 Active: {total}\n📋 Queued: {queued}", show_alert=True)
+
+        elif a == "q_help":
+            await q.answer(
+                "/play song | /vplay URL | /aiplay mood\n"
+                "/pause /resume /skip /stop /loop\n"
+                "/shuffle /fx /vol 1-200 /queue\n"
+                "/autoplay /remove index /np",
+                show_alert=True,
+            )
 
     except Exception as e:
         logger.exception(f"CB {a}: {e}")
@@ -1350,12 +1396,12 @@ async def fx_cb(_, q: CallbackQuery):
     state = queues.get(cid)
 
     if mode not in _DSP_FILTERS:
-        return await q.answer("❌ Invalid")
+        return await q.answer("❌ Invalid FX")
 
     queues.set_dsp(cid, mode)
     await q.answer(f"🎛️ {_DSP_NAMES.get(mode, mode)}")
 
-    # Restart stream with new FX if playing
+    # Restart stream with new FX
     if state.is_playing and state.current:
         try:
             track = state.current.track
@@ -1363,7 +1409,7 @@ async def fx_cb(_, q: CallbackQuery):
             await start_stream(cid, track, is_video)
             await send_card(cid, state, is_video)
         except Exception as e:
-            logger.warning(f"FX restart error: {e}")
+            logger.warning(f"FX restart: {e}")
 
     await q.message.edit_reply_markup(reply_markup=fx_btns(state))
 
@@ -1372,14 +1418,14 @@ async def fx_cb(_, q: CallbackQuery):
 # MAIN
 # ═══════════════════════════════════════════════════
 async def main():
-    logger.info("🚀 Starting IMAXL VC Music Bot...")
+    logger.info("🚀 Starting IMAXL VC Music Bot v4.1...")
     await bot.start()
-    logger.info("🤖 Bot started")
+    logger.info("🤖 Bot ready")
     await assistant.start()
-    logger.info("👤 Assistant started")
+    logger.info("👤 Assistant ready")
     await calls.start()
-    logger.info("📞 Calls started")
-    logger.info(f"✅ Ready! Owner: {OWNER_USERNAME}")
+    logger.info("📞 Calls ready")
+    logger.info(f"✅ Owner: {OWNER_USERNAME}")
     await idle()
 
 
