@@ -1,7 +1,9 @@
 """
 queue_manager.py — Per-chat song queue + playback state.
+Enhanced with shuffle, remove, and idle cleanup.
 """
 
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -13,6 +15,7 @@ from saavn import Track
 class QueueItem:
     track: Track
     requested_by: str
+    added_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -29,7 +32,7 @@ class ChatState:
 
 
 class QueueManager:
-    def __init__(self, max_queue_size: int = 25):
+    def __init__(self, max_queue_size: int = 50):
         self.max_queue_size = max_queue_size
         self._chats: dict[int, ChatState] = {}
 
@@ -69,9 +72,6 @@ class QueueManager:
         state.is_playing = False
         return None
 
-    def skip_list(self, chat_id: int) -> list[QueueItem]:
-        return self.get(chat_id).queue
-
     def clear(self, chat_id: int):
         state = self.get(chat_id)
         state.queue.clear()
@@ -87,17 +87,16 @@ class QueueManager:
         return None
 
     def shuffle(self, chat_id: int):
-        import random
         random.shuffle(self.get(chat_id).queue)
 
     def cleanup_idle(self, idle_seconds: float) -> list[int]:
         now = time.time()
-        idle_chats = []
-        for chat_id, state in self._chats.items():
-            if not state.is_playing and not state.queue:
-                if now - state.last_activity > idle_seconds:
-                    idle_chats.append(chat_id)
-        return idle_chats
+        return [
+            cid for cid, state in self._chats.items()
+            if not state.is_playing
+            and not state.queue
+            and (now - state.last_activity) > idle_seconds
+        ]
 
     def forget(self, chat_id: int):
         self._chats.pop(chat_id, None)
