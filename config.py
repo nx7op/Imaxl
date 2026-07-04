@@ -49,7 +49,3 @@ MAX_QUEUE_SIZE = _env_int("MAX_QUEUE_SIZE", 50)
 AUTO_LEAVE_SECONDS = _env_int("AUTO_LEAVE_SECONDS", 180)
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "15"))
 BOT_TAGLINE = "FastTrack VC Music"
-
-# AI auto-suggest endpoint (internal use only — never shown to users)
-AI_SUGGEST_BASE = os.environ.get("AI_SUGGEST_BASE", "https://gemini.adi7ya.workers.dev/")
-AI_SUGGEST_TIMEOUT = float(os.environ.get("AI_SUGGEST_TIMEOUT", "8"))
