@@ -2,8 +2,7 @@
 """
 FastTrack VC Music Bot — Ultimate Edition
 YouTube HQ Audio + Video Stream
-Real LoFi Effect • Ultra Fast • Clean UI
-Owner: @stillrahul
+Real LoFi Effect • Ultra Fast • Clean UI • AI Autoplay
 """
 
 from __future__ import annotations
@@ -40,6 +39,7 @@ import yt_dlp
 import config
 from saavn import SaavnClient, Track
 from queue_manager import QueueManager, ChatState
+import ai_suggest
 
 # ==============================================================================
 logging.basicConfig(
@@ -72,9 +72,9 @@ saavn = SaavnClient()
 queues = QueueManager(max_queue_size=getattr(config, "MAX_QUEUE_SIZE", 50))
 
 DEFAULT_THUMB = "https://telegra.ph/file/default_music_thumb.jpg"
-DSP_MATRIX: dict[int, str] = {}
 LOFI_CHATS: set[int] = set()
 NOW_MSG: dict[int, int] = {}
+AUTOPLAY_LOCK: dict[int, bool] = {}  # prevent double-trigger race
 
 # ==============================================================================
 # Helpers
@@ -95,8 +95,8 @@ def uname(msg: Message) -> str:
     return u.first_name or (f"@{u.username}" if u.username else "User")
 
 
-async def auto_del(msg: Message, delay: float = 0.5):
-    """Delete user command message after short delay."""
+async def auto_del(msg: Message, delay: float = 0.4):
+    """Delete the user's own command message shortly after (keeps chat clean)."""
     await asyncio.sleep(delay)
     try:
         await msg.delete()
@@ -105,7 +105,6 @@ async def auto_del(msg: Message, delay: float = 0.5):
 
 
 async def safe_edit(msg, text: str, markup=None):
-    """Edit message safely, ignore errors."""
     try:
         await msg.edit_text(text, reply_markup=markup)
     except Exception:
@@ -119,34 +118,14 @@ async def safe_del(msg):
         pass
 
 
-# ==============================================================================
-# AI Mood
-# ==============================================================================
-MOODS = {
-    "sad": ["tu jaane na", "channa mereya", "kabira", "agar tum sath ho", "tujhe bhula diya"],
-    "party": ["kala chashma", "kar gayi chull", "badri ki dulhania", "lungi dance", "sheila ki jawani"],
-    "gym": ["believer", "unstoppable sia", "till i collapse", "remember the name", "zinda"],
-    "lofi": ["hindi lofi chill", "tum se hi lofi", "kun faya kun lofi", "baarishein lofi", "aaoge jab tum lofi"],
-    "romantic": ["kesariya", "tum hi ho", "raataan lambiyan", "pehle bhi main", "hawayein"],
-    "devotional": ["hanuman chalisa", "gayatri mantra", "achyutam keshavam", "om namah shivaya"],
-    "90s": ["pehla nasha", "tujhe dekha to", "kuch kuch hota hai", "ye kaali kaali aankhen"],
-}
-
-
-def mood_pick(prompt: str) -> str:
-    p = prompt.lower()
-    for mood, kw in {
-        "sad": ["sad", "dard", "rona", "broken", "cry"],
-        "party": ["party", "dance", "nacho", "club", "dj"],
-        "gym": ["gym", "workout", "energy", "power"],
-        "lofi": ["lofi", "chill", "relax", "sleep", "study"],
-        "romantic": ["romantic", "love", "pyar", "ishq"],
-        "devotional": ["bhajan", "mantra", "god", "pooja"],
-        "90s": ["90s", "old", "classic", "retro"],
-    }.items():
-        if any(w in p for w in kw):
-            return random.choice(MOODS[mood])
-    return random.choice([t for s in MOODS.values() for t in s])
+async def flash(cid: int, text: str, seconds: float = 2.5):
+    """Send a short-lived status message and clean it up — no spam left behind."""
+    try:
+        m = await bot.send_message(cid, text)
+    except Exception:
+        return
+    await asyncio.sleep(seconds)
+    await safe_del(m)
 
 
 # ==============================================================================
@@ -196,7 +175,7 @@ def clean_yt_url(url: str) -> str:
 
 
 # ==============================================================================
-# YouTube Engine
+# YouTube Engine — fastest strategy first, short timeouts, parallel-ready
 # ==============================================================================
 class YT:
     STRATEGIES = [
@@ -217,8 +196,8 @@ class YT:
             "nocheckcertificate": True,
             "geo_bypass": True,
             "noplaylist": True,
-            "socket_timeout": 20,
-            "retries": 3,
+            "socket_timeout": 15,
+            "retries": 2,
             "cachedir": False,
             "source_address": "0.0.0.0",
             "http_headers": {
@@ -241,7 +220,6 @@ class YT:
 
         for strat in cls.STRATEGIES:
             try:
-                logger.info(f"⚡ {strat['name']}")
                 with yt_dlp.YoutubeDL(cls._opts(strat, fmt)) as ydl:
                     info = ydl.extract_info(query, download=False)
                 if not info:
@@ -303,50 +281,87 @@ async def find_track(query: str, video: bool = False) -> Optional[Track]:
         except Exception:
             pass
     return None
-
-
+    # ==============================================================================
+# Real LoFi Effect — ffmpeg pipe, non-blocking, no stream stall
 # ==============================================================================
-# LoFi Audio Effect
-# ==============================================================================
-def lofi_stream_url(url: str) -> str:
+def lofi_local_media(url: str) -> str:
     """
-    Apply LoFi audio effect using ffmpeg filters.
-    This creates a real lofi effect: slowed, reverb, low-pass filter.
+    Build an ffmpeg command that pipes a real lofi-filtered audio stream.
+    Runs in its own process; pytgcalls reads from the pipe, so the VC
+    itself never blocks on ffmpeg's CPU work — that's what fixes the 'ruk jata h' stall.
     """
+    filters_chain = (
+        "asetrate=44100*0.92,"
+        "atempo=1.03,"          # counter the pitch/tempo shift from asetrate so it doesn't drag
+        "lowpass=f=3200,"
+        "aecho=0.8:0.7:40:0.25,"
+        "bass=g=4:f=110:w=0.6"
+    )
     return (
-        f"ffmpeg -i '{url}' -af "
-        f"'asetrate=44100*0.9,atempo=1.0,"
-        f"lowpass=f=2500,"
-        f"aecho=0.8:0.88:60:0.4,"
-        f"bass=g=5:f=110:w=0.6' "
-        f"-f s16le -ac 2 -ar 48000 pipe:1"
+        f"ffmpeg -nostdin -re -i \"{url}\" "
+        f"-vn -af \"{filters_chain}\" "
+        f"-f s16le -ac 2 -ar 48000 -acodec pcm_s16le pipe:1"
+    )
+
+
+def build_media(url: str, cid: int, is_video: bool) -> MediaStream:
+    """
+    Central place that decides audio path (raw url vs lofi ffmpeg pipe).
+    -re flag on ffmpeg reads at native frame rate, which is what stops
+    buffering-related stalls compared to reading the whole file at once.
+    """
+    if is_video:
+        return MediaStream(
+            url,
+            audio_parameters=AudioQuality.STUDIO,
+            video_parameters=VideoQuality.HD_720p,
+        )
+
+    if cid in LOFI_CHATS:
+        return MediaStream(
+            lofi_local_media(url),
+            audio_parameters=AudioQuality.STUDIO,
+            video_flags=MediaStream.Flags.IGNORE,
+        )
+
+    return MediaStream(
+        url,
+        audio_parameters=AudioQuality.STUDIO,
+        video_flags=MediaStream.Flags.IGNORE,
     )
 
 
 # ==============================================================================
-# UI — Clean, Bold, Human Style
+# Clean Bold UI
 # ==============================================================================
-def card(track: Track, by: str, state: ChatState, cid: int, is_video: bool = False) -> str:
-    dsp = DSP_MATRIX.get(cid, "Standard")
-    dur = getattr(track, "duration_str", None) or f"{track.duration}s"
-    src = "📹 Video" if is_video else ("🎵 Saavn" if "Saavn" in (track.album or "") else "🎧 YouTube")
-    lofi = "  •  🌙 LoFi ON" if cid in LOFI_CHATS else ""
-    q = len(state.queue)
-    status = "⏸ Paused" if state.is_paused else "▶ Playing"
+def card(track: Track, by: str, state: ChatState, cid: int, is_video: bool, ai_picked: bool = False) -> str:
+    dur = track.duration_str
+    src = "📹 VIDEO" if is_video else ("🎧 YT HQ" if "YouTube" in (track.album or "") else "🎵 SAAVN")
+    lofi_tag = " · 🌙 LOFI" if cid in LOFI_CHATS and not is_video else ""
+    ai_tag = " · 🤖 AI PICK" if ai_picked else ""
+    status = "⏸ PAUSED" if state.is_paused else "▶ PLAYING"
+    loop_tag = " · 🔁 LOOP" if state.loop else ""
+    qcount = len(state.queue)
 
     return (
-        f"<b>{track.title}</b>\n"
-        f"{track.artist}\n\n"
-        f"{src}  •  {dur}  •  {status}{lofi}\n"
-        f"{'🔁 Loop  •  ' if state.loop else ''}"
-        f"Queue: {q}\n\n"
-        f"<b>Requested by {by}</b>"
+        f"🎶 <b>{track.title}</b>\n"
+        f"👤 {track.artist}\n"
+        f"┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+        f"<b>{status}</b>{loop_tag}\n"
+        f"{src} · ⏱ {dur}{lofi_tag}{ai_tag}\n"
+        f"📋 Queue: <b>{qcount}</b>\n"
+        f"┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+        f"🙋 <b>{by}</b>"
     )
 
 
-def btns(state: ChatState) -> InlineKeyboardMarkup:
+def btns(state: ChatState, cid: int) -> InlineKeyboardMarkup:
     pp = ("▶", "q_resume") if state.is_paused else ("⏸", "q_pause")
     lp = ("🔁 ✓", "q_loop") if state.loop else ("🔁", "q_loop")
+    lofi_on = cid in LOFI_CHATS
+    lf = ("🌙 ✓", "q_lofi") if lofi_on else ("🌙", "q_lofi")
+    ai_on = state.ai_mode
+    ai = ("🤖 ✓", "q_ai") if ai_on else ("🤖", "q_ai")
 
     return InlineKeyboardMarkup([
         [
@@ -357,11 +372,11 @@ def btns(state: ChatState) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(lp[0], callback_data=lp[1]),
             InlineKeyboardButton("🔀", callback_data="q_shuffle"),
-            InlineKeyboardButton("🌙 LoFi", callback_data="q_lofi"),
+            InlineKeyboardButton(lf[0], callback_data=lf[1]),
         ],
         [
-            InlineKeyboardButton(f"📋 Queue", callback_data="q_queue"),
-            InlineKeyboardButton("🗑", callback_data="q_remove"),
+            InlineKeyboardButton("📋 Queue", callback_data="q_queue"),
+            InlineKeyboardButton(ai[0], callback_data=ai[1]),
         ],
     ])
 
@@ -370,46 +385,16 @@ def btns(state: ChatState) -> InlineKeyboardMarkup:
 # Stream Core
 # ==============================================================================
 async def start_stream(cid: int, track: Track, video: bool = False):
-    url = track.url
-
-    if video:
-        await calls.play(
-            cid,
-            MediaStream(
-                url,
-                audio_parameters=AudioQuality.STUDIO,
-                video_parameters=VideoQuality.HD_720p,
-            ),
-        )
-    else:
-        # LoFi effect applies real audio filter
-        if cid in LOFI_CHATS:
-            await calls.play(
-                cid,
-                MediaStream(
-                    url,
-                    audio_parameters=AudioQuality.STUDIO,
-                    video_flags=MediaStream.Flags.IGNORE,
-                ),
-            )
-        else:
-            await calls.play(
-                cid,
-                MediaStream(
-                    url,
-                    audio_parameters=AudioQuality.STUDIO,
-                    video_flags=MediaStream.Flags.IGNORE,
-                ),
-            )
+    media = build_media(track.url, cid, video)
+    await calls.play(cid, media)
 
 
-async def send_card(cid: int, state: ChatState, video: bool = False):
+async def send_card(cid: int, state: ChatState, video: bool = False, ai_picked: bool = False):
     if not state.current:
         return
     it = state.current
-    cap = card(it.track, it.requested_by, state, cid, video)
+    cap = card(it.track, it.requested_by, state, cid, video, ai_picked)
 
-    # Delete old now playing message
     old = NOW_MSG.pop(cid, None)
     if old:
         try:
@@ -420,12 +405,12 @@ async def send_card(cid: int, state: ChatState, video: bool = False):
     try:
         msg = await bot.send_photo(
             cid, photo=it.track.thumb or DEFAULT_THUMB,
-            caption=cap, reply_markup=btns(state),
+            caption=cap, reply_markup=btns(state, cid),
         )
         NOW_MSG[cid] = msg.id
     except Exception:
         try:
-            msg = await bot.send_message(cid, cap, reply_markup=btns(state))
+            msg = await bot.send_message(cid, cap, reply_markup=btns(state, cid))
             NOW_MSG[cid] = msg.id
         except Exception:
             pass
@@ -433,22 +418,59 @@ async def send_card(cid: int, state: ChatState, video: bool = False):
 
 async def advance(cid: int):
     nxt = queues.next(cid)
+
     if not nxt:
+        state = queues.get(cid)
+        if state.ai_mode:
+            await autoplay_next(cid)
+            return
         try:
             await calls.leave_call(cid)
         except Exception:
             pass
         NOW_MSG.pop(cid, None)
         return
+
     try:
-        is_video = "Video" in (nxt.track.album or "")
-        await start_stream(cid, nxt.track, is_video)
-        await send_card(cid, queues.get(cid), is_video)
+        await start_stream(cid, nxt.track, nxt.is_video)
+        await send_card(cid, queues.get(cid), nxt.is_video, nxt.ai_picked)
     except Exception as e:
         logger.warning(f"Advance error: {e}")
         queues.get(cid).loop = False
         await asyncio.sleep(0.5)
         await advance(cid)
+
+
+async def autoplay_next(cid: int):
+    """AI mode: queue is empty, pick something automatically and keep the vibe going."""
+    if AUTOPLAY_LOCK.get(cid):
+        return
+    AUTOPLAY_LOCK[cid] = True
+    try:
+        state = queues.get(cid)
+        last = state.current.track if state.current else None
+        last_title = last.title if last else "Bollywood hit"
+        last_artist = last.artist if last else "various"
+
+        query = await ai_suggest.suggest_next(cid, last_title, last_artist)
+        track = await find_track(query, video=False)
+
+        if not track:
+            try:
+                await calls.leave_call(cid)
+            except Exception:
+                pass
+            NOW_MSG.pop(cid, None)
+            return
+
+        queues.add(cid, track, "🤖 AI Autoplay", is_video=False, ai_picked=True)
+        nxt = queues.next(cid)
+        await start_stream(cid, nxt.track, False)
+        await send_card(cid, state, False, ai_picked=True)
+    except Exception as e:
+        logger.warning(f"Autoplay error: {e}")
+    finally:
+        AUTOPLAY_LOCK[cid] = False
 
 
 @calls.on_update()
@@ -459,24 +481,24 @@ async def on_end(_, update):
 
 
 # ==============================================================================
-# Play Helper — Single message, no spam
+# Play Helper
 # ==============================================================================
 async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False):
     asyncio.create_task(auto_del(msg))
 
-    status = await bot.send_message(cid, f"<b>⚡ Searching...</b>")
+    status = await bot.send_message(cid, "⚡ <b>Searching...</b>")
 
     t0 = time.time()
     track = await find_track(query, video)
     elapsed = round(time.time() - t0, 1)
 
     if not track:
-        await safe_edit(status, "❌ <b>Not found.</b> Check cookies or try different query.")
-        await asyncio.sleep(3)
+        await safe_edit(status, "❌ <b>Not found.</b> Try a different query.")
+        await asyncio.sleep(2.5)
         await safe_del(status)
         return
 
-    added, pos = queues.add(cid, track, by)
+    added, pos = queues.add(cid, track, by, is_video=video, ai_picked=False)
     if not added:
         await safe_edit(status, "⚠️ <b>Queue full.</b>")
         await asyncio.sleep(2)
@@ -487,26 +509,22 @@ async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False
 
     if pos == 0:
         try:
-            await safe_edit(status, f"<b>▶ Starting...</b>  ({elapsed}s)")
             await start_stream(cid, track, video)
             await safe_del(status)
             await send_card(cid, state, video)
         except NoActiveGroupCall:
             queues.clear(cid)
             await safe_edit(status, "❌ <b>Start voice chat first.</b>")
-            await asyncio.sleep(3)
+            await asyncio.sleep(2.5)
             await safe_del(status)
         except Exception as e:
             queues.clear(cid)
             await safe_edit(status, f"❌ <b>Error:</b> <code>{str(e)[:150]}</code>")
-            await asyncio.sleep(4)
+            await asyncio.sleep(3)
             await safe_del(status)
     else:
-        await safe_edit(
-            status,
-            f"<b>📥 Queued #{pos}</b>\n{track.title} — {track.artist}"
-        )
-        await asyncio.sleep(3)
+        await safe_edit(status, f"📥 <b>Queued #{pos}</b>\n{track.title} — {track.artist}  ({elapsed}s)")
+        await asyncio.sleep(2.5)
         await safe_del(status)
 
 
@@ -516,10 +534,8 @@ async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False
 @bot.on_message(filters.command(["play", "p"]) & filters.group)
 async def cmd_play(_, msg: Message):
     if len(msg.command) < 2:
-        r = await msg.reply_text("<b>Usage:</b> <code>/play song</code>")
         asyncio.create_task(auto_del(msg))
-        await asyncio.sleep(3)
-        await safe_del(r)
+        await flash(msg.chat.id, "ℹ️ <b>Usage:</b> <code>/play song name</code>")
         return
     query = msg.text.split(None, 1)[1].strip()
     await _play(msg.chat.id, query, uname(msg), msg)
@@ -528,26 +544,11 @@ async def cmd_play(_, msg: Message):
 @bot.on_message(filters.command(["vplay", "vp", "video"]) & filters.group)
 async def cmd_vplay(_, msg: Message):
     if len(msg.command) < 2:
-        r = await msg.reply_text("<b>Usage:</b> <code>/vplay song</code>")
         asyncio.create_task(auto_del(msg))
-        await asyncio.sleep(3)
-        await safe_del(r)
+        await flash(msg.chat.id, "ℹ️ <b>Usage:</b> <code>/vplay song name</code>")
         return
     query = msg.text.split(None, 1)[1].strip()
     await _play(msg.chat.id, query, uname(msg), msg, video=True)
-
-
-@bot.on_message(filters.command(["aiplay", "ai"]) & filters.group)
-async def cmd_ai(_, msg: Message):
-    if len(msg.command) < 2:
-        r = await msg.reply_text("<b>Moods:</b> sad party gym lofi romantic 90s")
-        asyncio.create_task(auto_del(msg))
-        await asyncio.sleep(3)
-        await safe_del(r)
-        return
-    prompt = msg.text.split(None, 1)[1].strip()
-    pick = mood_pick(prompt)
-    await _play(msg.chat.id, pick, f"🤖 {uname(msg)}", msg)
 
 
 @bot.on_message(filters.command(["skip", "s"]) & filters.group)
@@ -565,6 +566,7 @@ async def cmd_stop(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     cid = msg.chat.id
     queues.clear(cid)
+    ai_suggest.forget_chat(cid)
     try:
         await calls.leave_call(cid)
     except Exception:
@@ -620,36 +622,48 @@ async def cmd_lofi(_, msg: Message):
 
     s = queues.get(cid)
     if s.current:
-        # Restart stream with/without lofi
         try:
-            is_video = "Video" in (s.current.track.album or "")
+            is_video = s.current.is_video
             await start_stream(cid, s.current.track, is_video)
-            await send_card(cid, s, is_video)
+            await send_card(cid, s, is_video, s.current.ai_picked)
         except Exception:
             pass
+
+
+@bot.on_message(filters.command(["aiplay", "ai"]) & filters.group)
+async def cmd_ai_toggle(_, msg: Message):
+    """Toggle AI autoplay mode on/off for this chat."""
+    asyncio.create_task(auto_del(msg))
+    cid = msg.chat.id
+    s = queues.get(cid)
+    s.ai_mode = not s.ai_mode
+    await flash(cid, f"🤖 <b>AI Autoplay {'ON' if s.ai_mode else 'OFF'}</b>", seconds=2)
+    if s.current:
+        await send_card(cid, s, s.current.is_video, s.current.ai_picked)
+    elif s.ai_mode and not s.is_playing:
+        await autoplay_next(cid)
 
 
 @bot.on_message(filters.command(["queue", "q"]) & filters.group)
 async def cmd_queue(_, msg: Message):
     asyncio.create_task(auto_del(msg))
-    s = queues.get(msg.chat.id)
+    cid = msg.chat.id
+    s = queues.get(cid)
     if not s.current and not s.queue:
-        r = await msg.reply_text("<b>Queue empty.</b>")
-        await asyncio.sleep(2)
-        await safe_del(r)
+        await flash(cid, "📋 <b>Queue empty.</b>")
         return
 
     lines = []
     if s.current:
-        lines.append(f"<b>▶ {s.current.track.title}</b>")
+        tag = " 🤖" if s.current.ai_picked else ""
+        lines.append(f"▶ <b>{s.current.track.title}</b>{tag}")
     for i, item in enumerate(s.queue[:8], 1):
-        lines.append(f"<b>{i}.</b> {item.track.title}")
+        tag = " 🤖" if item.ai_picked else ""
+        lines.append(f"<b>{i}.</b> {item.track.title}{tag}")
     if len(s.queue) > 8:
         lines.append(f"<i>+{len(s.queue) - 8} more</i>")
 
-    r = await msg.reply_text("\n".join(lines))
-    await asyncio.sleep(8)
-    await safe_del(r)
+    await flash(cid, "\n".join(lines), seconds=6)
 
 
 @bot.on_message(filters.command("shuffle") & filters.group)
@@ -674,17 +688,13 @@ async def cmd_np(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     s = queues.get(msg.chat.id)
     if s.current:
-        await send_card(msg.chat.id, s)
+        await send_card(msg.chat.id, s, s.current.is_video, s.current.ai_picked)
 
 
 @bot.on_message(filters.command("cookies"))
 async def cmd_ck(_, msg: Message):
     asyncio.create_task(auto_del(msg))
-    r = await msg.reply_text(
-        f"🍪 {'✅' if COOKIES_PATH else '❌'} <code>{COOKIES_PATH or 'None'}</code>"
-    )
-    await asyncio.sleep(4)
-    await safe_del(r)
+    await flash(msg.chat.id, f"🍪 {'✅' if COOKIES_PATH else '❌'} <code>{COOKIES_PATH or 'None'}</code>", seconds=3)
 
 
 @bot.on_message(filters.command("reloadcookies"))
@@ -693,59 +703,52 @@ async def cmd_rcook(_, msg: Message):
     if not is_sudo(msg):
         return
     find_cookies()
-    r = await msg.reply_text(f"🔄 {'✅' if COOKIES_PATH else '❌'}")
-    await asyncio.sleep(3)
-    await safe_del(r)
+    await flash(msg.chat.id, f"🔄 {'✅' if COOKIES_PATH else '❌'}")
 
 
 @bot.on_message(filters.command("ping"))
 async def cmd_ping(_, msg: Message):
     asyncio.create_task(auto_del(msg))
     t1 = time.time()
-    r = await msg.reply_text("...")
+    r = await bot.send_message(msg.chat.id, "...")
     t2 = time.time()
-    await safe_edit(r, f"<b>{round((t2 - t1) * 1000)}ms</b>")
-    await asyncio.sleep(3)
+    await safe_edit(r, f"🏓 <b>{round((t2 - t1) * 1000)}ms</b>")
+    await asyncio.sleep(2.5)
     await safe_del(r)
 
 
 @bot.on_message(filters.command("help"))
 async def cmd_help(_, msg: Message):
     asyncio.create_task(auto_del(msg))
-    r = await msg.reply_text(
-        "<b>FastTrack VC Music</b>\n\n"
-        "<b>Play</b>\n"
-        "/play — Audio stream\n"
-        "/vplay — Video stream\n"
-        "/aiplay — AI mood play\n\n"
-        "<b>Controls</b>\n"
-        "/pause  /resume  /skip  /stop\n"
-        "/loop  /lofi  /shuffle\n\n"
-        "<b>Queue</b>\n"
-        "/queue  /remove  /np\n\n"
-        "<b>Tools</b>\n"
-        "/ping  /cookies\n\n"
-        "<b>@stillrahul</b>",
+    await bot.send_message(
+        msg.chat.id,
+        "🎧 <b>FASTTRACK VC MUSIC</b>\n"
+        "┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"
+        "▶ <b>Play</b>\n"
+        "/play — audio stream\n"
+        "/vplay — video stream\n"
+        "/aiplay — toggle AI autoplay\n\n"
+        "🎛 <b>Controls</b>\n"
+        "/pause /resume /skip /stop\n"
+        "/loop /lofi /shuffle\n\n"
+        "📋 <b>Queue</b>\n"
+        "/queue /remove /np\n\n"
+        "🛠 <b>Tools</b>\n"
+        "/ping /cookies",
     )
-    await asyncio.sleep(15)
-    await safe_del(r)
 
 
 @bot.on_message(filters.command("start"))
 async def cmd_start(_, msg: Message):
     await msg.reply_text(
-        "<b>FastTrack VC Music</b>\n\n"
-        "Group me add karo, VC start karo\n"
-        "<code>/play song</code>\n\n"
-        "<b>@stillrahul</b>",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("Owner", url="https://t.me/stillrahul"),
-        ]])
+        "🎧 <b>FASTTRACK VC MUSIC</b>\n\n"
+        "Add me to a group, start a voice chat, then:\n"
+        "<code>/play song name</code>",
     )
 
 
 # ==============================================================================
-# Callbacks — Single handler, no spam
+# Callbacks
 # ==============================================================================
 @bot.on_callback_query(filters.regex(r"^q_"))
 async def cb(_, q: CallbackQuery):
@@ -759,12 +762,7 @@ async def cb(_, q: CallbackQuery):
                 return await q.answer("—")
             await calls.pause_stream(cid)
             s.is_paused = True
-            cap = card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-            if cap:
-                try:
-                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
-                except Exception:
-                    pass
+            await _refresh_card(q, s, cid)
             await q.answer("Paused")
 
         elif a == "q_resume":
@@ -772,12 +770,7 @@ async def cb(_, q: CallbackQuery):
                 return await q.answer("—")
             await calls.resume_stream(cid)
             s.is_paused = False
-            cap = card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-            if cap:
-                try:
-                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
-                except Exception:
-                    pass
+            await _refresh_card(q, s, cid)
             await q.answer("Resumed")
 
         elif a == "q_skip":
@@ -790,6 +783,7 @@ async def cb(_, q: CallbackQuery):
 
         elif a == "q_stop":
             queues.clear(cid)
+            ai_suggest.forget_chat(cid)
             try:
                 await calls.leave_call(cid)
             except Exception:
@@ -802,12 +796,7 @@ async def cb(_, q: CallbackQuery):
             if not s.is_playing:
                 return await q.answer("—")
             s.loop = not s.loop
-            cap = card(s.current.track, s.current.requested_by, s, cid) if s.current else None
-            if cap:
-                try:
-                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
-                except Exception:
-                    pass
+            await _refresh_card(q, s, cid)
             await q.answer(f"Loop {'on' if s.loop else 'off'}")
 
         elif a == "q_shuffle":
@@ -825,11 +814,19 @@ async def cb(_, q: CallbackQuery):
                 await q.answer("🌙 LoFi ON")
 
             if s.current:
-                cap = card(s.current.track, s.current.requested_by, s, cid)
                 try:
-                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
+                    await start_stream(cid, s.current.track, s.current.is_video)
                 except Exception:
                     pass
+                await _refresh_card(q, s, cid)
+
+        elif a == "q_ai":
+            s.ai_mode = not s.ai_mode
+            await q.answer(f"AI Autoplay {'ON' if s.ai_mode else 'OFF'}")
+            if s.current:
+                await _refresh_card(q, s, cid)
+            elif s.ai_mode and not s.is_playing:
+                await autoplay_next(cid)
 
         elif a == "q_queue":
             if not s.current and not s.queue:
@@ -843,15 +840,19 @@ async def cb(_, q: CallbackQuery):
                 lines.append(f"+{len(s.queue) - 6}")
             await q.answer("\n".join(lines), show_alert=True)
 
-        elif a == "q_remove":
-            if not s.queue:
-                return await q.answer("Empty")
-            item = queues.remove_at(cid, 1)
-            await q.answer(f"Removed {item.track.title}" if item else "—", show_alert=True)
-
     except Exception as e:
         logger.exception(f"CB {a}: {e}")
         await q.answer("Error")
+
+
+async def _refresh_card(q: CallbackQuery, s: ChatState, cid: int):
+    if not s.current:
+        return
+    cap = card(s.current.track, s.current.requested_by, s, cid, s.current.is_video, s.current.ai_picked)
+    try:
+        await q.message.edit_caption(caption=cap, reply_markup=btns(s, cid))
+    except Exception:
+        pass
 
 
 # ==============================================================================
@@ -867,6 +868,7 @@ async def watchdog():
                 except Exception:
                     pass
                 queues.forget(cid)
+                ai_suggest.forget_chat(cid)
                 NOW_MSG.pop(cid, None)
         except Exception:
             pass
@@ -878,7 +880,6 @@ async def watchdog():
 async def boot():
     print("=" * 50)
     print("  FastTrack VC Music — Ultimate")
-    print("  @stillrahul")
     print("=" * 50)
 
     await assistant.start()
@@ -891,7 +892,7 @@ async def boot():
     print(f"\n  Bot: @{b.username}")
     print(f"  Assistant: {a.first_name} [{a.id}]")
     print(f"  Cookies: {'✅' if COOKIES_PATH else '❌'}")
-    print(f"\n  Ready.\n")
+    print("\n  Ready.\n")
 
     asyncio.create_task(watchdog())
     await idle()
@@ -905,7 +906,7 @@ def main():
         pass
     finally:
         async def cleanup():
-            for fn in [saavn.close, bot.stop, assistant.stop]:
+            for fn in [saavn.close, ai_suggest.close, bot.stop, assistant.stop]:
                 try:
                     await fn()
                 except Exception:
