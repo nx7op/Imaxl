@@ -213,14 +213,9 @@ def clean_yt_url(url: str) -> str:
 
 
 # ==============================================================================
-# YouTube Engine — Original order (cookie clients first) + Cache
+# YouTube Engine
 # ==============================================================================
-_TRACK_CACHE: dict[str, tuple[float, "Track"]] = {}   # query -> (time, track)
-_CACHE_TTL = 900  # 15 min (stream urls stay valid a while)
-
-
 class YT:
-    # Order restored to what was working: cookie-based clients FIRST
     STRATEGIES = [
         {"name": "tv_embedded", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "cookies": True},
         {"name": "web_creator", "args": {"youtube": {"player_client": ["web_creator"]}}, "cookies": True},
@@ -239,8 +234,8 @@ class YT:
             "nocheckcertificate": True,
             "geo_bypass": True,
             "noplaylist": True,
-            "socket_timeout": 15,       # modest (was 20) — safe + a bit faster
-            "retries": 2,               # (was 3)
+            "socket_timeout": 20,
+            "retries": 3,
             "cachedir": False,
             "source_address": "0.0.0.0",
             "http_headers": {
@@ -302,30 +297,19 @@ class YT:
 
 
 # ==============================================================================
-# Resolver — Cached & Fast
+# Resolver
 # ==============================================================================
 async def find_track(query: str, video: bool = False) -> Optional[Track]:
     query = query.strip()
     is_url = query.startswith("http")
-
-    # ⚡ Cache hit → instant (skip whole fetch)
-    key = f"{'v' if video else 'a'}:{query.lower()}"
-    hit = _TRACK_CACHE.get(key)
-    if hit and (time.time() - hit[0]) < _CACHE_TTL:
-        logger.info(f"⚡ cache → {hit[1].title}")
-        return hit[1]
-
     t = await YT.track(query, video)
     if t:
-        _TRACK_CACHE[key] = (time.time(), t)
         return t
-
     if not is_url and not video:
         try:
             t = await saavn.get_first_result(query)
             if t:
                 logger.info(f"✅ Saavn → {t.title}")
-                _TRACK_CACHE[key] = (time.time(), t)
                 return t
         except Exception:
             pass
@@ -829,6 +813,9 @@ async def cmd_start(_, msg: Message):
         "╰━━━━━━━━━━━━━━━━━━━━━╯\n"
         f"👑 Powered by <b>{OWNER_TAG}</b>",
         reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{(msg._client.me.username if getattr(msg, '_client', None) and getattr(msg._client, 'me', None) else 'YourBot')}?startgroup=true"),
+            ],
             [
                 InlineKeyboardButton("📖 Help", callback_data="ui_help"),
                 InlineKeyboardButton("👑 Owner", url=OWNER_URL),
