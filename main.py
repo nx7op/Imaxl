@@ -213,20 +213,20 @@ def clean_yt_url(url: str) -> str:
 
 
 # ==============================================================================
-# YouTube Engine — Speed Optimized
+# YouTube Engine — Original order (cookie clients first) + Cache
 # ==============================================================================
 _TRACK_CACHE: dict[str, tuple[float, "Track"]] = {}   # query -> (time, track)
 _CACHE_TTL = 900  # 15 min (stream urls stay valid a while)
 
 
 class YT:
-    # Fastest / most reliable clients first → fail fast on the rest
+    # Order restored to what was working: cookie-based clients FIRST
     STRATEGIES = [
-        {"name": "android", "args": {"youtube": {"player_client": ["android"]}}, "cookies": False},
         {"name": "tv_embedded", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "cookies": True},
         {"name": "web_creator", "args": {"youtube": {"player_client": ["web_creator"]}}, "cookies": True},
         {"name": "mweb", "args": {"youtube": {"player_client": ["mweb"]}}, "cookies": True},
         {"name": "default", "args": {}, "cookies": False},
+        {"name": "android", "args": {"youtube": {"player_client": ["android"]}}, "cookies": False},
     ]
 
     @classmethod
@@ -239,11 +239,8 @@ class YT:
             "nocheckcertificate": True,
             "geo_bypass": True,
             "noplaylist": True,
-            "socket_timeout": 8,        # ↓ fail fast (was 20)
-            "retries": 1,               # ↓ no long retry loops (was 3)
-            "fragment_retries": 1,
-            "extractor_retries": 1,
-            "skip_download": True,
+            "socket_timeout": 15,       # modest (was 20) — safe + a bit faster
+            "retries": 2,               # (was 3)
             "cachedir": False,
             "source_address": "0.0.0.0",
             "http_headers": {
