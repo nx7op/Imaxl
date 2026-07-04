@@ -15,6 +15,8 @@ class QueueItem:
     track: Track
     requested_by: str
     added_at: float = field(default_factory=time.time)
+    is_video: bool = False
+    ai_picked: bool = False
 
 
 @dataclass
@@ -24,6 +26,7 @@ class ChatState:
     is_playing: bool = False
     is_paused: bool = False
     loop: bool = False
+    ai_mode: bool = False
     last_activity: float = field(default_factory=time.time)
 
     def touch(self):
@@ -40,10 +43,12 @@ class QueueManager:
             self._chats[chat_id] = ChatState()
         return self._chats[chat_id]
 
-    def add(self, chat_id: int, track: Track, requested_by: str) -> tuple[bool, int]:
+    def add(self, chat_id: int, track: Track, requested_by: str,
+            is_video: bool = False, ai_picked: bool = False) -> tuple[bool, int]:
         state = self.get(chat_id)
         state.touch()
-        item = QueueItem(track=track, requested_by=requested_by)
+        item = QueueItem(track=track, requested_by=requested_by,
+                          is_video=is_video, ai_picked=ai_picked)
 
         if not state.is_playing and state.current is None:
             state.current = item
