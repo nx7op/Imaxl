@@ -12,7 +12,7 @@ import httpx
 
 from config import SAAVN_API_BASE, HTTP_TIMEOUT
 
-logger = logging.getLogger("saavn-bot.saavn")
+logger = logging.getLogger("fasttrack.saavn")
 
 
 def clean_html(text: Optional[str]) -> str:
