@@ -213,15 +213,20 @@ def clean_yt_url(url: str) -> str:
 
 
 # ==============================================================================
-# YouTube Engine
+# YouTube Engine — Speed Optimized
 # ==============================================================================
+_TRACK_CACHE: dict[str, tuple[float, "Track"]] = {}   # query -> (time, track)
+_CACHE_TTL = 900  # 15 min (stream urls stay valid a while)
+
+
 class YT:
+    # Fastest / most reliable clients first → fail fast on the rest
     STRATEGIES = [
+        {"name": "android", "args": {"youtube": {"player_client": ["android"]}}, "cookies": False},
         {"name": "tv_embedded", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "cookies": True},
         {"name": "web_creator", "args": {"youtube": {"player_client": ["web_creator"]}}, "cookies": True},
         {"name": "mweb", "args": {"youtube": {"player_client": ["mweb"]}}, "cookies": True},
         {"name": "default", "args": {}, "cookies": False},
-        {"name": "android", "args": {"youtube": {"player_client": ["android"]}}, "cookies": False},
     ]
 
     @classmethod
@@ -234,8 +239,11 @@ class YT:
             "nocheckcertificate": True,
             "geo_bypass": True,
             "noplaylist": True,
-            "socket_timeout": 20,
-            "retries": 3,
+            "socket_timeout": 8,        # ↓ fail fast (was 20)
+            "retries": 1,               # ↓ no long retry loops (was 3)
+            "fragment_retries": 1,
+            "extractor_retries": 1,
+            "skip_download": True,
             "cachedir": False,
             "source_address": "0.0.0.0",
             "http_headers": {
@@ -297,19 +305,30 @@ class YT:
 
 
 # ==============================================================================
-# Resolver
+# Resolver — Cached & Fast
 # ==============================================================================
 async def find_track(query: str, video: bool = False) -> Optional[Track]:
     query = query.strip()
     is_url = query.startswith("http")
+
+    # ⚡ Cache hit → instant (skip whole fetch)
+    key = f"{'v' if video else 'a'}:{query.lower()}"
+    hit = _TRACK_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _CACHE_TTL:
+        logger.info(f"⚡ cache → {hit[1].title}")
+        return hit[1]
+
     t = await YT.track(query, video)
     if t:
+        _TRACK_CACHE[key] = (time.time(), t)
         return t
+
     if not is_url and not video:
         try:
             t = await saavn.get_first_result(query)
             if t:
                 logger.info(f"✅ Saavn → {t.title}")
+                _TRACK_CACHE[key] = (time.time(), t)
                 return t
         except Exception:
             pass
@@ -813,9 +832,6 @@ async def cmd_start(_, msg: Message):
         "╰━━━━━━━━━━━━━━━━━━━━━╯\n"
         f"👑 Powered by <b>{OWNER_TAG}</b>",
         reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{(msg._client.me.username if getattr(msg, '_client', None) and getattr(msg._client, 'me', None) else 'YourBot')}?startgroup=true"),
-            ],
             [
                 InlineKeyboardButton("📖 Help", callback_data="ui_help"),
                 InlineKeyboardButton("👑 Owner", url=OWNER_URL),
