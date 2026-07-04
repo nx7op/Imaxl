@@ -1,6 +1,5 @@
 """
-saavn.py — Thin async client for the JioSaavn API (https://saavn.sumit.co).
-Used to search for songs and resolve a playable, highest-quality download URL.
+saavn.py — Thin async client for JioSaavn API.
 """
 
 import asyncio
@@ -43,8 +42,6 @@ def format_duration(seconds) -> str:
 
 
 class Track:
-    """A normalized, ready-to-play track."""
-
     __slots__ = ("id", "title", "artist", "album", "duration", "url", "thumb")
 
     def __init__(self, id_, title, artist, album, duration, url, thumb):
@@ -52,8 +49,8 @@ class Track:
         self.title = title
         self.artist = artist
         self.album = album
-        self.duration = duration          # seconds (int) or None
-        self.url = url                    # playable audio URL
+        self.duration = duration
+        self.url = url
         self.thumb = thumb
 
     @property
@@ -98,7 +95,6 @@ class SaavnClient:
         await self._client.aclose()
 
     async def search(self, query: str, limit: int = 10, retries: int = 2) -> list[Track]:
-        """Search JioSaavn and return a list of playable Track objects."""
         url = f"{self.base_url}/api/search/songs"
         params = {"query": query, "limit": limit}
 
