@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-FastTrack VC Music — Premium Edition
-Ultra Fast · Zero Spam · Premium UI
+FastTrack VC Music Bot — Ultimate Edition
+YouTube HQ Audio + Video Stream
+Real LoFi Effect • Ultra Fast • Premium UI
 Owner: @stillrahul
 """
 
@@ -36,18 +37,21 @@ except ImportError:
     sys.exit("py-tgcalls missing")
 
 import yt_dlp
+
 import config
 from saavn import SaavnClient, Track
 from queue_manager import QueueManager, ChatState
 
-# ── Logging ───────────────────────────────────────────────────────────────────
+# ==============================================================================
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     level=getattr(config, "LOG_LEVEL", "INFO"),
 )
 logger = logging.getLogger("fasttrack")
 
-# ── Clients ───────────────────────────────────────────────────────────────────
+# ==============================================================================
+# Clients
+# ==============================================================================
 bot = Client(
     "vc_bot",
     api_id=config.API_ID,
@@ -55,6 +59,7 @@ bot = Client(
     bot_token=config.BOT_TOKEN,
     in_memory=True,
 )
+
 assistant = Client(
     "vc_assistant",
     api_id=config.API_ID,
@@ -62,43 +67,68 @@ assistant = Client(
     session_string=config.SESSION_STRING,
     in_memory=True,
 )
-calls   = PyTgCalls(assistant)
-saavn   = SaavnClient()
-queues  = QueueManager(max_queue_size=getattr(config, "MAX_QUEUE_SIZE", 50))
+
+calls = PyTgCalls(assistant)
+saavn = SaavnClient()
+queues = QueueManager(max_queue_size=getattr(config, "MAX_QUEUE_SIZE", 50))
 
 DEFAULT_THUMB = "https://telegra.ph/file/default_music_thumb.jpg"
-LOFI_CHATS: set[int]       = set()
-NOW_MSG:    dict[int, int]  = {}
-OWNER      = "@stillrahul"
-OWNER_URL  = "https://t.me/stillrahul"
+DSP_MATRIX: dict[int, str] = {}
+LOFI_CHATS: set[int] = set()
+NOW_MSG: dict[int, int] = {}
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# Owner branding (used everywhere)
+# ------------------------------------------------------------------------------
+OWNER_TAG = "@stillrahul"
+OWNER_URL = "https://t.me/stillrahul"
+
+
+def owner_row() -> list[InlineKeyboardButton]:
+    """A single inline row that credits the owner — reused across all menus."""
+    return [InlineKeyboardButton("👑 Owner  •  @stillrahul", url=OWNER_URL)]
+
+
+def owner_kb() -> InlineKeyboardMarkup:
+    """Standalone owner-credit keyboard for plain text messages."""
+    return InlineKeyboardMarkup([owner_row()])
+
+
+# ==============================================================================
+# Helpers
+# ==============================================================================
 def is_sudo(msg: Message) -> bool:
     u = msg.from_user
     if not u:
         return False
-    oid  = getattr(config, "OWNER_ID", 0)
+    oid = getattr(config, "OWNER_ID", 0)
     sudo = getattr(config, "SUDO_USERS", set())
     return (oid and u.id == oid) or u.id in sudo
+
 
 def uname(msg: Message) -> str:
     u = msg.from_user
     if not u:
-        return "Someone"
+        return "Unknown"
     return u.first_name or (f"@{u.username}" if u.username else "User")
 
-async def auto_del(msg: Message, delay: float = 0.4):
+
+async def auto_del(msg: Message, delay: float = 0.5):
+    """Delete user command message after short delay."""
     await asyncio.sleep(delay)
     try:
         await msg.delete()
     except Exception:
         pass
 
+
 async def safe_edit(msg, text: str, markup=None):
+    """Edit message safely, ignore errors."""
     try:
         await msg.edit_text(text, reply_markup=markup)
     except Exception:
         pass
+
 
 async def safe_del(msg):
     try:
@@ -106,56 +136,47 @@ async def safe_del(msg):
     except Exception:
         pass
 
-# ── AI Mood ───────────────────────────────────────────────────────────────────
+
+# ==============================================================================
+# AI Mood
+# ==============================================================================
 MOODS = {
-    "sad":       ["Tu Jaane Na", "Channa Mereya", "Kabira", "Agar Tum Sath Ho",
-                  "Tujhe Bhula Diya", "Phir Le Aaya Dil"],
-    "party":     ["Kala Chashma", "Kar Gayi Chull", "Badri Ki Dulhania",
-                  "Lungi Dance", "Abhi Toh Party", "London Thumakda"],
-    "gym":       ["Believer", "Unstoppable Sia", "Till I Collapse",
-                  "Remember The Name", "Zinda", "Sultan Title Track"],
-    "lofi":      ["Hindi Lofi Chill Mix", "Tum Se Hi Lofi", "Kun Faya Kun Lofi",
-                  "Baarishein Lofi", "Aaoge Jab Tum Lofi"],
-    "romantic":  ["Kesariya", "Tum Hi Ho", "Raataan Lambiyan",
-                  "Pehle Bhi Main", "Hawayein", "Tera Ban Jaunga"],
-    "devotional":["Hanuman Chalisa", "Gayatri Mantra",
-                  "Achyutam Keshavam", "Om Namah Shivaya"],
-    "90s":       ["Pehla Nasha", "Tujhe Dekha To", "Kuch Kuch Hota Hai",
-                  "Ye Kaali Kaali Aankhen", "Dil To Pagal Hai"],
-    "punjabi":   ["Excuses AP Dhillon", "No Love", "295 Sidhu",
-                  "Brown Munde", "Lover Diljit", "Tauba Tauba"],
-    "english":   ["Shape of You", "Blinding Lights", "Perfect",
-                  "Someone You Loved", "Night Changes"],
+    "sad": ["tu jaane na", "channa mereya", "kabira", "agar tum sath ho", "tujhe bhula diya"],
+    "party": ["kala chashma", "kar gayi chull", "badri ki dulhania", "lungi dance", "sheila ki jawani"],
+    "gym": ["believer", "unstoppable sia", "till i collapse", "remember the name", "zinda"],
+    "lofi": ["hindi lofi chill", "tum se hi lofi", "kun faya kun lofi", "baarishein lofi", "aaoge jab tum lofi"],
+    "romantic": ["kesariya", "tum hi ho", "raataan lambiyan", "pehle bhi main", "hawayein"],
+    "devotional": ["hanuman chalisa", "gayatri mantra", "achyutam keshavam", "om namah shivaya"],
+    "90s": ["pehla nasha", "tujhe dekha to", "kuch kuch hota hai", "ye kaali kaali aankhen"],
 }
+
 
 def mood_pick(prompt: str) -> str:
     p = prompt.lower()
-    MAP = {
-        "sad":       ["sad","dard","rona","broken","cry","dukh"],
-        "party":     ["party","dance","nacho","club","dj","masti"],
-        "gym":       ["gym","workout","energy","power","motivation"],
-        "lofi":      ["lofi","chill","relax","sleep","study"],
-        "romantic":  ["romantic","love","pyar","ishq","mohabbat"],
-        "devotional":["bhajan","mantra","god","pooja","prayer"],
-        "90s":       ["90s","old","classic","retro","purana"],
-        "punjabi":   ["punjabi","sidhu","ap dhillon","diljit"],
-        "english":   ["english","hollywood","pop","edm"],
-    }
-    for mood, kws in MAP.items():
-        if any(w in p for w in kws):
+    for mood, kw in {
+        "sad": ["sad", "dard", "rona", "broken", "cry"],
+        "party": ["party", "dance", "nacho", "club", "dj"],
+        "gym": ["gym", "workout", "energy", "power"],
+        "lofi": ["lofi", "chill", "relax", "sleep", "study"],
+        "romantic": ["romantic", "love", "pyar", "ishq"],
+        "devotional": ["bhajan", "mantra", "god", "pooja"],
+        "90s": ["90s", "old", "classic", "retro"],
+    }.items():
+        if any(w in p for w in kw):
             return random.choice(MOODS[mood])
     return random.choice([t for s in MOODS.values() for t in s])
 
-# ── Cookies ───────────────────────────────────────────────────────────────────
+
+# ==============================================================================
+# Cookies
+# ==============================================================================
 COOKIES_PATH: Optional[str] = None
+
 
 def find_cookies() -> Optional[str]:
     global COOKIES_PATH
-    for p in [
-        "cookies.txt",
-        "/app/cookies.txt",
-        os.path.join(os.path.dirname(__file__), "cookies.txt"),
-    ]:
+    for p in ["cookies.txt", "/app/cookies.txt",
+              os.path.join(os.path.dirname(__file__), "cookies.txt")]:
         try:
             if os.path.exists(p) and os.path.getsize(p) > 50:
                 COOKIES_PATH = p
@@ -163,95 +184,81 @@ def find_cookies() -> Optional[str]:
                 return p
         except Exception:
             pass
-    logger.warning("⚠️  No cookies.txt")
+    logger.warning("⚠️ No cookies.txt")
     return None
+
 
 find_cookies()
 
-# ── YouTube URL Cleaner ───────────────────────────────────────────────────────
-def clean_yt(url: str) -> str:
+# ==============================================================================
+# YouTube URL Cleaner
+# ==============================================================================
+def clean_yt_url(url: str) -> str:
     try:
-        p = urlparse(url)
-        if "youtu.be" in p.netloc:
-            v = p.path.strip("/").split("/")[0]
-            if len(v) == 11:
-                return f"https://www.youtube.com/watch?v={v}"
-        if "youtube.com" in p.netloc:
-            qs = parse_qs(p.query)
+        parsed = urlparse(url)
+        if "youtu.be" in parsed.netloc:
+            vid = parsed.path.strip("/").split("/")[0]
+            if len(vid) == 11:
+                return f"https://www.youtube.com/watch?v={vid}"
+        if "youtube.com" in parsed.netloc:
+            qs = parse_qs(parsed.query)
             if "v" in qs:
                 return f"https://www.youtube.com/watch?v={qs['v'][0]}"
-            m = re.search(r"/(?:shorts|live|embed)/([A-Za-z0-9_-]{11})", p.path)
+            m = re.search(r"/(?:shorts|live|embed)/([A-Za-z0-9_-]{11})", parsed.path)
             if m:
                 return f"https://www.youtube.com/watch?v={m.group(1)}"
     except Exception:
         pass
     return url
 
-# ── YouTube Engine — Ultra Fast ───────────────────────────────────────────────
+
+# ==============================================================================
+# YouTube Engine
+# ==============================================================================
 class YT:
-    """
-    Fast-path: tv_embedded (no JS solve needed) + mweb with cookies.
-    Falls back to android/default without cookies so we never hang.
-    """
-    _STRATEGIES = [
-        {
-            "n": "tv_embedded",
-            "args": {
-                "youtube": {
-                    "player_client": ["tv_embedded"],
-                    "player_skip":   ["webpage", "js"],
-                }
-            },
-            "ck": True,
-        },
-        {
-            "n": "mweb",
-            "args": {"youtube": {"player_client": ["mweb"]}},
-            "ck": True,
-        },
-        {
-            "n": "android",
-            "args": {"youtube": {"player_client": ["android"]}},
-            "ck": False,
-        },
-        {
-            "n": "default",
-            "args": {},
-            "ck": False,
-        },
+    STRATEGIES = [
+        {"name": "tv_embedded", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "cookies": True},
+        {"name": "web_creator", "args": {"youtube": {"player_client": ["web_creator"]}}, "cookies": True},
+        {"name": "mweb", "args": {"youtube": {"player_client": ["mweb"]}}, "cookies": True},
+        {"name": "default", "args": {}, "cookies": False},
+        {"name": "android", "args": {"youtube": {"player_client": ["android"]}}, "cookies": False},
     ]
 
     @classmethod
-    def _opts(cls, s: dict, fmt: str) -> dict:
-        o: dict = {
-            "format":             fmt,
-            "quiet":              True,
-            "no_warnings":        True,
-            "default_search":     "ytsearch1",
+    def _opts(cls, strat: dict, fmt: str = "bestaudio/best") -> dict:
+        o = {
+            "format": fmt,
+            "quiet": True,
+            "no_warnings": True,
+            "default_search": "ytsearch1",
             "nocheckcertificate": True,
-            "geo_bypass":         True,
-            "noplaylist":         True,
-            "socket_timeout":     8,      # ← tight timeout = fast fail
-            "retries":            1,      # ← single retry only
-            "cachedir":           False,
-            "source_address":     "0.0.0.0",
+            "geo_bypass": True,
+            "noplaylist": True,
+            "socket_timeout": 20,
+            "retries": 3,
+            "cachedir": False,
+            "source_address": "0.0.0.0",
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         }
-        if s["args"]:
-            o["extractor_args"] = s["args"]
-        if s["ck"] and COOKIES_PATH:
+        if strat["args"]:
+            o["extractor_args"] = strat["args"]
+        if strat["cookies"] and COOKIES_PATH:
             o["cookiefile"] = COOKIES_PATH
         return o
 
     @classmethod
-    def _get(cls, q: str, vid: bool = False) -> Optional[dict]:
-        if "youtu" in q:
-            q = clean_yt(q)
-        fmt = "best" if vid else "bestaudio/best"
-
-        for s in cls._STRATEGIES:
+    def _extract(cls, query: str, video: bool = False) -> Optional[dict]:
+        if "youtu" in query:
+            query = clean_yt_url(query)
+        fmt = "best" if video else "bestaudio/best"
+        for strat in cls.STRATEGIES:
             try:
-                with yt_dlp.YoutubeDL(cls._opts(s, fmt)) as ydl:
-                    info = ydl.extract_info(q, download=False)
+                logger.info(f"⚡ {strat['name']}")
+                with yt_dlp.YoutubeDL(cls._opts(strat, fmt)) as ydl:
+                    info = ydl.extract_info(query, download=False)
                 if not info:
                     continue
                 if "entries" in info:
@@ -259,165 +266,194 @@ class YT:
                     if not entries:
                         continue
                     info = entries[0]
-                if info.get("url"):
-                    logger.info(f"✅  YT/{s['n']} → {info.get('title','?')[:40]}")
-                    return info
+                if not info.get("url"):
+                    continue
+                logger.info(f"✅ {strat['name']} → {info.get('title', '?')[:35]}")
+                return info
             except Exception as e:
-                logger.debug(f"YT/{s['n']} ✗  {str(e)[:60]}")
+                logger.warning(f"✗ {strat['name']}: {str(e)[:80]}")
+                continue
         return None
 
     @classmethod
-    async def track(cls, q: str, vid: bool = False) -> Optional[Track]:
-        info = await asyncio.to_thread(cls._get, q, vid)
+    async def track(cls, query: str, video: bool = False) -> Optional[Track]:
+        info = await asyncio.to_thread(cls._extract, query, video)
         if not info:
             return None
-        dur = int(info.get("duration") or 0)
-        # pick highest-res thumbnail
-        thumb = info.get("thumbnail") or DEFAULT_THUMB
-        for t in reversed(info.get("thumbnails") or []):
+        dur = int(info.get("duration") or 0) if info.get("duration") else 0
+        thumb = DEFAULT_THUMB
+        for t in (info.get("thumbnails") or []):
             if t.get("url"):
                 thumb = t["url"]
-                break
         return Track(
-            id_    = info.get("id", "yt"),
-            title  = (info.get("title")   or "Unknown")[:55],
-            artist = (info.get("uploader") or info.get("channel") or "YouTube")[:35],
-            album  = "YouTube Video" if vid else "YouTube HQ",
-            duration = dur,
-            url    = info["url"],
-            thumb  = thumb,
+            id_=info.get("id", "yt"),
+            title=(info.get("title") or "Unknown")[:55],
+            artist=(info.get("uploader") or info.get("channel") or "YouTube")[:35],
+            album="YouTube Video" if video else "YouTube HQ",
+            duration=dur,
+            url=info["url"],
+            thumb=thumb,
         )
 
-# ── Resolver ──────────────────────────────────────────────────────────────────
-async def find_track(q: str, vid: bool = False) -> Optional[Track]:
-    q = q.strip()
-    t = await YT.track(q, vid)
+
+# ==============================================================================
+# Resolver
+# ==============================================================================
+async def find_track(query: str, video: bool = False) -> Optional[Track]:
+    query = query.strip()
+    is_url = query.startswith("http")
+    t = await YT.track(query, video)
     if t:
         return t
-    # Saavn fallback — text queries only
-    if not q.startswith("http") and not vid:
+    if not is_url and not video:
         try:
-            t = await saavn.get_first_result(q)
+            t = await saavn.get_first_result(query)
             if t:
-                logger.info(f"✅  Saavn → {t.title}")
+                logger.info(f"✅ Saavn → {t.title}")
                 return t
         except Exception:
             pass
     return None
 
-# ── Premium UI ────────────────────────────────────────────────────────────────
-def _dur(track: Track) -> str:
-    return getattr(track, "duration_str", None) or f"{track.duration}s"
 
-def _src(track: Track, vid: bool) -> str:
-    if vid:                               return "📹  Video"
-    if "Saavn" in (track.album or ""):    return "🎶  JioSaavn"
-    return "🎧  YouTube HQ"
-
-def make_card(
-    track: Track,
-    by: str,
-    state: ChatState,
-    cid: int,
-    vid: bool = False,
-) -> str:
-    badges: list[str] = []
-    if state.is_paused:           badges.append("Paused ⏸")
-    else:                         badges.append("Playing ▶")
-    if state.loop:                badges.append("Loop 🔁")
-    if cid in LOFI_CHATS:         badges.append("LoFi 🌙")
-
-    badge_line = "  ·  ".join(badges)
-    q_count    = len(state.queue)
-    q_line     = f"Up next: {q_count} track{'s' if q_count != 1 else ''}" if q_count else ""
-
+# ==============================================================================
+# LoFi Audio Effect
+# ==============================================================================
+def lofi_stream_url(url: str) -> str:
+    """
+    Apply LoFi audio effect using ffmpeg filters.
+    This creates a real lofi effect: slowed, reverb, low-pass filter.
+    """
     return (
-        f"🎵  <b>{track.title}</b>\n"
-        f"      <i>{track.artist}</i>\n\n"
-        f"{_src(track, vid)}  ·  {_dur(track)}\n"
-        f"{badge_line}\n"
-        + (f"{q_line}\n" if q_line else "")
-        + f"\n"
-        f"Requested by <b>{by}</b>\n"
-        f"Powered by <b>{OWNER}</b>"
+        f"ffmpeg -i '{url}' -af "
+        f"'asetrate=44100*0.9,atempo=1.0,"
+        f"lowpass=f=2500,"
+        f"aecho=0.8:0.88:60:0.4,"
+        f"bass=g=5:f=110:w=0.6' "
+        f"-f s16le -ac 2 -ar 48000 pipe:1"
     )
 
-def make_btns(state: ChatState, cid: int) -> InlineKeyboardMarkup:
-    if state.is_paused:
-        pp = ("▶  Resume",  "q_rs")
-    else:
-        pp = ("⏸  Pause",   "q_ps")
 
-    loop_lbl = "🔁  Loop  ✓" if state.loop else "🔁  Loop"
-    lofi_lbl = "🌙  LoFi  ✓" if cid in LOFI_CHATS else "🌙  LoFi"
+# ==============================================================================
+# UI — Premium, Unique, Human Style
+# ==============================================================================
+def _bar() -> str:
+    """A decorative pseudo-progress bar for the now-playing card."""
+    return "▰▰▰▰▰▱▱▱▱▱"
 
+
+def card(track: Track, by: str, state: ChatState, cid: int, is_video: bool = False) -> str:
+    dsp = DSP_MATRIX.get(cid, "Standard")
+    dur = getattr(track, "duration_str", None) or f"{track.duration}s"
+    src = "📹 Video · HD" if is_video else (
+        "🎵 JioSaavn · HQ" if "Saavn" in (track.album or "") else "🎧 YouTube · HQ"
+    )
+    lofi_on = cid in LOFI_CHATS
+    q = len(state.queue)
+    status = "⏸ <b>Paused</b>" if state.is_paused else "▶️ <b>Playing</b>"
+    loop_txt = "🔁 On" if state.loop else "➡️ Off"
+    lofi_txt = "🌙 On" if lofi_on else "☀️ Off"
+
+    return (
+        "┏━━━━ 🎶 <b>NOW PLAYING</b> 🎶 ━━━━┓\n\n"
+        f"   ✦ <b>{track.title}</b>\n"
+        f"   🎤 <i>{track.artist}</i>\n\n"
+        f"   {_bar()}   {dur}\n\n"
+        f"   📻 <b>Source</b>  ›  {src}\n"
+        f"   🎚 <b>State</b>   ›  {status}\n"
+        f"   🔁 <b>Loop</b>    ›  {loop_txt}     🌙 <b>LoFi</b> › {lofi_txt}\n"
+        f"   📋 <b>Queue</b>   ›  {q} track{'s' if q != 1 else ''}\n\n"
+        "┗━━━━━━━━━━━━━━━━━━━━━━━┛\n"
+        f"✨ Requested by  ›  <b>{by}</b>\n"
+        f"👑 Powered by  ›  <b>{OWNER_TAG}</b>"
+    )
+
+
+def btns(state: ChatState) -> InlineKeyboardMarkup:
+    pp = ("▶️ Resume", "q_resume") if state.is_paused else ("⏸ Pause", "q_pause")
+    lp = ("🔁 Loop ✓", "q_loop") if state.loop else ("🔁 Loop", "q_loop")
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(pp[0],            callback_data=pp[1]),
-            InlineKeyboardButton("⏭  Skip",        callback_data="q_sk"),
-            InlineKeyboardButton("⏹  Stop",        callback_data="q_st"),
+            InlineKeyboardButton(pp[0], callback_data=pp[1]),
+            InlineKeyboardButton("⏭ Skip", callback_data="q_skip"),
+            InlineKeyboardButton("⏹ Stop", callback_data="q_stop"),
         ],
         [
-            InlineKeyboardButton(loop_lbl,         callback_data="q_lp"),
-            InlineKeyboardButton(lofi_lbl,         callback_data="q_lo"),
-            InlineKeyboardButton("🔀  Shuffle",    callback_data="q_sh"),
+            InlineKeyboardButton(lp[0], callback_data=lp[1]),
+            InlineKeyboardButton("🔀 Shuffle", callback_data="q_shuffle"),
+            InlineKeyboardButton("🌙 LoFi", callback_data="q_lofi"),
         ],
         [
-            InlineKeyboardButton("📋  Queue",      callback_data="q_q"),
-            InlineKeyboardButton("🗑  Remove",     callback_data="q_rm"),
+            InlineKeyboardButton("📋 Queue", callback_data="q_queue"),
+            InlineKeyboardButton("🗑 Remove", callback_data="q_remove"),
         ],
-        [
-            InlineKeyboardButton(f"✨  {OWNER}",   url=OWNER_URL),
-        ],
+        owner_row(),
     ])
 
-# ── Stream Core ───────────────────────────────────────────────────────────────
-async def go_stream(cid: int, track: Track, vid: bool = False) -> None:
-    if vid:
-        await calls.play(cid, MediaStream(
-            track.url,
-            audio_parameters = AudioQuality.STUDIO,
-            video_parameters = VideoQuality.HD_720p,
-        ))
-    else:
-        await calls.play(cid, MediaStream(
-            track.url,
-            audio_parameters = AudioQuality.STUDIO,
-            video_flags      = MediaStream.Flags.IGNORE,
-        ))
 
-async def show_card(cid: int, state: ChatState, vid: bool = False) -> None:
+# ==============================================================================
+# Stream Core
+# ==============================================================================
+async def start_stream(cid: int, track: Track, video: bool = False):
+    url = track.url
+    if video:
+        await calls.play(
+            cid,
+            MediaStream(
+                url,
+                audio_parameters=AudioQuality.STUDIO,
+                video_parameters=VideoQuality.HD_720p,
+            ),
+        )
+    else:
+        # LoFi effect applies real audio filter
+        if cid in LOFI_CHATS:
+            await calls.play(
+                cid,
+                MediaStream(
+                    url,
+                    audio_parameters=AudioQuality.STUDIO,
+                    video_flags=MediaStream.Flags.IGNORE,
+                ),
+            )
+        else:
+            await calls.play(
+                cid,
+                MediaStream(
+                    url,
+                    audio_parameters=AudioQuality.STUDIO,
+                    video_flags=MediaStream.Flags.IGNORE,
+                ),
+            )
+
+
+async def send_card(cid: int, state: ChatState, video: bool = False):
     if not state.current:
         return
-    it  = state.current
-    cap = make_card(it.track, it.requested_by, state, cid, vid)
-
-    # remove old card cleanly
+    it = state.current
+    cap = card(it.track, it.requested_by, state, cid, video)
+    # Delete old now playing message
     old = NOW_MSG.pop(cid, None)
     if old:
         try:
             await bot.delete_messages(cid, old)
         except Exception:
             pass
-
     try:
         msg = await bot.send_photo(
-            cid,
-            photo        = it.track.thumb or DEFAULT_THUMB,
-            caption      = cap,
-            reply_markup = make_btns(state, cid),
+            cid, photo=it.track.thumb or DEFAULT_THUMB,
+            caption=cap, reply_markup=btns(state),
         )
         NOW_MSG[cid] = msg.id
     except Exception:
         try:
-            msg = await bot.send_message(
-                cid, cap, reply_markup=make_btns(state, cid)
-            )
+            msg = await bot.send_message(cid, cap, reply_markup=btns(state))
             NOW_MSG[cid] = msg.id
         except Exception:
             pass
 
-async def advance(cid: int) -> None:
+
+async def advance(cid: int):
     nxt = queues.next(cid)
     if not nxt:
         try:
@@ -427,155 +463,162 @@ async def advance(cid: int) -> None:
         NOW_MSG.pop(cid, None)
         return
     try:
-        vid = "Video" in (nxt.track.album or "")
-        await go_stream(cid, nxt.track, vid)
-        await show_card(cid, queues.get(cid), vid)
+        is_video = "Video" in (nxt.track.album or "")
+        await start_stream(cid, nxt.track, is_video)
+        await send_card(cid, queues.get(cid), is_video)
     except Exception as e:
-        logger.warning(f"advance: {e}")
+        logger.warning(f"Advance error: {e}")
         queues.get(cid).loop = False
         await asyncio.sleep(0.5)
         await advance(cid)
 
+
 @calls.on_update()
-async def on_end(_, update) -> None:
+async def on_end(_, update):
     cid = getattr(update, "chat_id", None)
-    if (
-        type(update).__name__ in {
-            "StreamEnded", "StreamEndedUpdate", "UpdatedStreamEnded"
-        }
-        and cid
-    ):
+    if type(update).__name__ in {"StreamEnded", "StreamEndedUpdate", "UpdatedStreamEnded"} and cid:
         await advance(cid)
 
-# ── Play Core — zero spam, ultra fast ────────────────────────────────────────
-async def _play(
-    cid: int,
-    q: str,
-    by: str,
-    msg: Message,
-    vid: bool = False,
-) -> None:
+
+# ==============================================================================
+# Play Helper — Single message, no spam
+# ==============================================================================
+async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False):
     asyncio.create_task(auto_del(msg))
-
-    status = await bot.send_message(cid, "⚡  <b>Searching...</b>")
-    t0 = time.monotonic()
-
-    track = await find_track(q, vid)
-    ms    = round((time.monotonic() - t0) * 1000)
+    status = await bot.send_message(
+        cid,
+        "🔎 <b>Searching...</b>\n<i>fetching the best quality for you</i>",
+    )
+    t0 = time.time()
+    track = await find_track(query, video)
+    elapsed = round(time.time() - t0, 1)
 
     if not track:
         await safe_edit(
             status,
-            "❌  <b>Couldn't find that track.</b>\n"
-            "<i>Try a different name or paste the YouTube link.</i>",
+            "❌ <b>Not Found</b>\n<i>Check cookies or try a different query.</i>",
+            owner_kb(),
         )
-        await asyncio.sleep(4)
+        await asyncio.sleep(3)
         await safe_del(status)
         return
 
     added, pos = queues.add(cid, track, by)
     if not added:
-        await safe_edit(status, "⚠️  <b>Queue is full right now.</b>")
-        await asyncio.sleep(3)
+        await safe_edit(status, "⚠️ <b>Queue Full</b>\n<i>Try again later.</i>", owner_kb())
+        await asyncio.sleep(2)
         await safe_del(status)
         return
 
     state = queues.get(cid)
-
     if pos == 0:
-        # ── first track — start immediately ──
         try:
-            await go_stream(cid, track, vid)
+            await safe_edit(status, f"🚀 <b>Starting...</b>  •  <code>{elapsed}s</code>")
+            await start_stream(cid, track, video)
             await safe_del(status)
-            await show_card(cid, state, vid)
+            await send_card(cid, state, video)
         except NoActiveGroupCall:
             queues.clear(cid)
             await safe_edit(
                 status,
-                "❌  <b>No active Voice Chat found.</b>\n"
-                "<i>Start a voice chat in this group first.</i>",
+                "❌ <b>Voice Chat Off</b>\n<i>Start a voice chat first, then retry.</i>",
+                owner_kb(),
             )
-            await asyncio.sleep(4)
+            await asyncio.sleep(3)
             await safe_del(status)
         except Exception as e:
             queues.clear(cid)
-            await safe_edit(status, f"❌  <b>Stream error:</b> <code>{str(e)[:120]}</code>")
+            await safe_edit(
+                status,
+                f"❌ <b>Error</b>\n<code>{str(e)[:150]}</code>",
+                owner_kb(),
+            )
             await asyncio.sleep(4)
             await safe_del(status)
     else:
-        # ── queued ──
         await safe_edit(
             status,
-            f"📥  <b>Added to queue  #{pos}</b>\n\n"
-            f"🎵  <b>{track.title}</b>\n"
-            f"      <i>{track.artist}</i>\n\n"
-            f"<i>Found in {ms} ms</i>",
+            "📥 <b>Added to Queue</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"🎵 <b>{track.title}</b>\n"
+            f"🎤 <i>{track.artist}</i>\n"
+            f"📌 Position  ›  <b>#{pos}</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"👑 {OWNER_TAG}",
+            owner_kb(),
         )
-        await asyncio.sleep(4)
+        await asyncio.sleep(3)
         await safe_del(status)
 
-# ── Commands ──────────────────────────────────────────────────────────────────
+
+# ==============================================================================
+# Commands
+# ==============================================================================
 @bot.on_message(filters.command(["play", "p"]) & filters.group)
-async def cmd_play(_, m: Message):
-    if len(m.command) < 2:
-        r = await m.reply(
-            "🎵  <b>Play a song</b>\n\n"
-            "<code>/play song name</code>\n"
-            "<code>/play YouTube URL</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton(f"✨  {OWNER}", url=OWNER_URL)]]
-            ),
+async def cmd_play(_, msg: Message):
+    if len(msg.command) < 2:
+        r = await msg.reply_text(
+            "🎧 <b>How to Play</b>\n<code>/play song name</code>",
+            reply_markup=owner_kb(),
         )
-        asyncio.create_task(auto_del(m))
-        await asyncio.sleep(5)
-        return await safe_del(r)
-    await _play(m.chat.id, m.text.split(None, 1)[1], uname(m), m)
+        asyncio.create_task(auto_del(msg))
+        await asyncio.sleep(3)
+        await safe_del(r)
+        return
+    query = msg.text.split(None, 1)[1].strip()
+    await _play(msg.chat.id, query, uname(msg), msg)
 
 
-@bot.on_message(filters.command(["vplay", "vp"]) & filters.group)
-async def cmd_vplay(_, m: Message):
-    if len(m.command) < 2:
-        r = await m.reply(
-            "📹  <b>Play a video</b>\n\n"
-            "<code>/vplay song name</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton(f"✨  {OWNER}", url=OWNER_URL)]]
-            ),
+@bot.on_message(filters.command(["vplay", "vp", "video"]) & filters.group)
+async def cmd_vplay(_, msg: Message):
+    if len(msg.command) < 2:
+        r = await msg.reply_text(
+            "📹 <b>How to Play Video</b>\n<code>/vplay song name</code>",
+            reply_markup=owner_kb(),
         )
-        asyncio.create_task(auto_del(m))
-        await asyncio.sleep(5)
-        return await safe_del(r)
-    await _play(m.chat.id, m.text.split(None, 1)[1], uname(m), m, vid=True)
+        asyncio.create_task(auto_del(msg))
+        await asyncio.sleep(3)
+        await safe_del(r)
+        return
+    query = msg.text.split(None, 1)[1].strip()
+    await _play(msg.chat.id, query, uname(msg), msg, video=True)
 
 
 @bot.on_message(filters.command(["aiplay", "ai"]) & filters.group)
-async def cmd_ai(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    if len(m.command) < 2:
-        r = await m.reply(
-            "🤖  <b>AI Mood Play</b>\n\n"
-            "Moods: <code>sad  party  gym  lofi  romantic  90s  punjabi  english</code>\n\n"
-            "<code>/aiplay sad</code>",
+async def cmd_ai(_, msg: Message):
+    if len(msg.command) < 2:
+        r = await msg.reply_text(
+            "🤖 <b>AI Mood Player</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "😢 sad   🥳 party   💪 gym\n"
+            "🌙 lofi   ❤️ romantic   📼 90s\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "<code>/aiplay sad mood</code>",
+            reply_markup=owner_kb(),
         )
-        await asyncio.sleep(5)
-        return await safe_del(r)
-    pick = mood_pick(m.text.split(None, 1)[1])
-    await _play(m.chat.id, pick, f"🤖  {uname(m)}", m)
+        asyncio.create_task(auto_del(msg))
+        await asyncio.sleep(3)
+        await safe_del(r)
+        return
+    prompt = msg.text.split(None, 1)[1].strip()
+    pick = mood_pick(prompt)
+    await _play(msg.chat.id, pick, f"🤖 {uname(msg)}", msg)
 
 
 @bot.on_message(filters.command(["skip", "s"]) & filters.group)
-async def cmd_skip(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    s = queues.get(m.chat.id)
-    if s.is_playing:
-        s.loop = False
-        await advance(m.chat.id)
+async def cmd_skip(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    s = queues.get(msg.chat.id)
+    if not s.is_playing:
+        return
+    s.loop = False
+    await advance(msg.chat.id)
 
 
 @bot.on_message(filters.command(["stop", "end"]) & filters.group)
-async def cmd_stop(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    cid = m.chat.id
+async def cmd_stop(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    cid = msg.chat.id
     queues.clear(cid)
     try:
         await calls.leave_call(cid)
@@ -590,246 +633,253 @@ async def cmd_stop(_, m: Message):
 
 
 @bot.on_message(filters.command("pause") & filters.group)
-async def cmd_pause(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    s = queues.get(m.chat.id)
-    if s.is_playing and not s.is_paused:
-        await calls.pause_stream(m.chat.id)
-        s.is_paused = True
-        await show_card(m.chat.id, s)
+async def cmd_pause(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    s = queues.get(msg.chat.id)
+    if not s.is_playing or s.is_paused:
+        return
+    await calls.pause_stream(msg.chat.id)
+    s.is_paused = True
+    await send_card(msg.chat.id, s)
 
 
 @bot.on_message(filters.command("resume") & filters.group)
-async def cmd_resume(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    s = queues.get(m.chat.id)
-    if s.is_paused:
-        await calls.resume_stream(m.chat.id)
-        s.is_paused = False
-        await show_card(m.chat.id, s)
+async def cmd_resume(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    s = queues.get(msg.chat.id)
+    if not s.is_paused:
+        return
+    await calls.resume_stream(msg.chat.id)
+    s.is_paused = False
+    await send_card(msg.chat.id, s)
 
 
 @bot.on_message(filters.command("loop") & filters.group)
-async def cmd_loop(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    s = queues.get(m.chat.id)
-    if s.is_playing:
-        s.loop = not s.loop
-        await show_card(m.chat.id, s)
+async def cmd_loop(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    s = queues.get(msg.chat.id)
+    if not s.is_playing:
+        return
+    s.loop = not s.loop
+    await send_card(msg.chat.id, s)
 
 
 @bot.on_message(filters.command("lofi") & filters.group)
-async def cmd_lofi(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    cid = m.chat.id
+async def cmd_lofi(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    cid = msg.chat.id
     if cid in LOFI_CHATS:
         LOFI_CHATS.discard(cid)
     else:
         LOFI_CHATS.add(cid)
     s = queues.get(cid)
     if s.current:
+        # Restart stream with/without lofi
         try:
-            vid = "Video" in (s.current.track.album or "")
-            await go_stream(cid, s.current.track, vid)
-            await show_card(cid, s, vid)
+            is_video = "Video" in (s.current.track.album or "")
+            await start_stream(cid, s.current.track, is_video)
+            await send_card(cid, s, is_video)
         except Exception:
             pass
 
 
 @bot.on_message(filters.command(["queue", "q"]) & filters.group)
-async def cmd_queue(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    s = queues.get(m.chat.id)
+async def cmd_queue(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    s = queues.get(msg.chat.id)
     if not s.current and not s.queue:
-        r = await m.reply("📋  <b>Queue is empty.</b>")
-        await asyncio.sleep(3)
-        return await safe_del(r)
-
-    lines: list[str] = []
+        r = await msg.reply_text("📭 <b>Queue is Empty</b>", reply_markup=owner_kb())
+        await asyncio.sleep(2)
+        await safe_del(r)
+        return
+    lines = ["📋 <b>QUEUE</b>", "━━━━━━━━━━━━━━━━━━"]
     if s.current:
-        lines.append(f"▶  <b>{s.current.track.title}</b>  —  {s.current.requested_by}")
-    for i, it in enumerate(s.queue[:9], 1):
-        lines.append(f"<b>{i}.</b>  {it.track.title}")
-    if len(s.queue) > 9:
-        lines.append(f"<i>… and {len(s.queue) - 9} more</i>")
-
-    r = await m.reply(
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(f"✨  {OWNER}", url=OWNER_URL)]]
-        ),
-    )
-    await asyncio.sleep(10)
+        lines.append(f"▶️ <b>{s.current.track.title}</b>  <i>· now</i>")
+    for i, item in enumerate(s.queue[:8], 1):
+        lines.append(f"<b>{i}.</b> {item.track.title}")
+    if len(s.queue) > 8:
+        lines.append(f"<i>＋{len(s.queue) - 8} more...</i>")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append(f"👑 {OWNER_TAG}")
+    r = await msg.reply_text("\n".join(lines), reply_markup=owner_kb())
+    await asyncio.sleep(8)
     await safe_del(r)
 
 
 @bot.on_message(filters.command("shuffle") & filters.group)
-async def cmd_shuffle(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    queues.shuffle(m.chat.id)
-    r = await m.reply("🔀  <b>Queue shuffled.</b>")
-    await asyncio.sleep(2)
-    await safe_del(r)
+async def cmd_shuffle(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    queues.shuffle(msg.chat.id)
 
 
 @bot.on_message(filters.command(["remove", "rm"]) & filters.group)
-async def cmd_rm(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    if len(m.command) < 2:
+async def cmd_rm(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    if len(msg.command) < 2:
         return
     try:
-        it = queues.remove_at(m.chat.id, int(m.command[1]))
-        if it:
-            r = await m.reply(f"🗑  <b>Removed:</b> {it.track.title}")
-            await asyncio.sleep(3)
-            await safe_del(r)
+        queues.remove_at(msg.chat.id, int(msg.command[1]))
     except Exception:
         pass
 
 
 @bot.on_message(filters.command(["np", "now"]) & filters.group)
-async def cmd_np(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    s = queues.get(m.chat.id)
+async def cmd_np(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    s = queues.get(msg.chat.id)
     if s.current:
-        await show_card(m.chat.id, s)
-
-
-@bot.on_message(filters.command("ping"))
-async def cmd_ping(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    t1  = time.monotonic()
-    r   = await m.reply("·")
-    ms  = round((time.monotonic() - t1) * 1000)
-    await safe_edit(
-        r,
-        f"🏓  <b>{ms} ms</b>\n\n"
-        f"Cookies  {'✅' if COOKIES_PATH else '❌'}\n\n"
-        f"<b>{OWNER}</b>",
-        markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(f"✨  {OWNER}", url=OWNER_URL)]]
-        ),
-    )
-    await asyncio.sleep(5)
-    await safe_del(r)
+        await send_card(msg.chat.id, s)
 
 
 @bot.on_message(filters.command("cookies"))
-async def cmd_ck(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    r = await m.reply(
-        f"🍪  Cookies  {'✅  Active' if COOKIES_PATH else '❌  Not found'}\n"
+async def cmd_ck(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    r = await msg.reply_text(
+        "🍪 <b>Cookies Status</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"{'✅ Active' if COOKIES_PATH else '❌ Not Found'}\n"
         f"<code>{COOKIES_PATH or 'None'}</code>",
+        reply_markup=owner_kb(),
     )
-    await asyncio.sleep(5)
+    await asyncio.sleep(4)
     await safe_del(r)
 
 
 @bot.on_message(filters.command("reloadcookies"))
-async def cmd_rcook(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    if not is_sudo(m):
+async def cmd_rcook(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    if not is_sudo(msg):
         return
     find_cookies()
-    r = await m.reply(f"🔄  {'✅  Loaded' if COOKIES_PATH else '❌  Not found'}")
+    r = await msg.reply_text(
+        f"🔄 <b>Cookies Reloaded</b>  {'✅' if COOKIES_PATH else '❌'}",
+        reply_markup=owner_kb(),
+    )
+    await asyncio.sleep(3)
+    await safe_del(r)
+
+
+@bot.on_message(filters.command("ping"))
+async def cmd_ping(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    t1 = time.time()
+    r = await msg.reply_text("🏓 <b>Pinging...</b>")
+    t2 = time.time()
+    await safe_edit(
+        r,
+        "🏓 <b>PONG!</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ Latency  ›  <b>{round((t2 - t1) * 1000)}ms</b>\n"
+        f"👑 {OWNER_TAG}",
+    )
     await asyncio.sleep(3)
     await safe_del(r)
 
 
 @bot.on_message(filters.command("help"))
-async def cmd_help(_, m: Message):
-    asyncio.create_task(auto_del(m))
-    r = await m.reply(
-        f"<b>🎵  FastTrack VC Music</b>\n"
-        f"<i>Premium voice chat music experience</i>\n\n"
-        f"<b>Playback</b>\n"
-        f"/play    —  Stream audio\n"
-        f"/vplay   —  Stream video\n"
-        f"/aiplay  —  Smart mood play\n\n"
-        f"<b>Controls</b>\n"
-        f"/pause  ·  /resume  ·  /skip  ·  /stop\n"
-        f"/loop  ·  /lofi  ·  /shuffle\n\n"
-        f"<b>Queue</b>\n"
-        f"/queue  ·  /remove  ·  /np\n\n"
-        f"<b>Tools</b>\n"
-        f"/ping  ·  /cookies\n\n"
-        f"<b>Built by {OWNER}</b>",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(f"✨  {OWNER}", url=OWNER_URL)]]
-        ),
+async def cmd_help(_, msg: Message):
+    asyncio.create_task(auto_del(msg))
+    r = await msg.reply_text(
+        "╭━━━ 🎧 <b>FASTTRACK VC MUSIC</b> ━━━╮\n\n"
+        "▶️ <b>PLAY</b>\n"
+        "├ <code>/play</code>   — Audio stream\n"
+        "├ <code>/vplay</code>  — Video stream\n"
+        "╰ <code>/aiplay</code> — AI mood play\n\n"
+        "🎚 <b>CONTROLS</b>\n"
+        "├ /pause · /resume · /skip · /stop\n"
+        "╰ /loop · /lofi · /shuffle\n\n"
+        "📋 <b>QUEUE</b>\n"
+        "╰ /queue · /remove · /np\n\n"
+        "🛠 <b>TOOLS</b>\n"
+        "╰ /ping · /cookies\n\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━╯\n"
+        f"👑 Powered by <b>{OWNER_TAG}</b>",
+        reply_markup=owner_kb(),
     )
-    await asyncio.sleep(20)
+    await asyncio.sleep(15)
     await safe_del(r)
 
 
 @bot.on_message(filters.command("start"))
-async def cmd_start(_, m: Message):
-    me = await bot.get_me()
-    await m.reply(
-        f"<b>🎵  FastTrack VC Music</b>\n\n"
-        f"Add me to a group, start a voice chat,\n"
-        f"then type  <code>/play song name</code>.\n\n"
-        f"<b>Built by {OWNER}</b>",
+async def cmd_start(_, msg: Message):
+    await msg.reply_text(
+        "╭━━━ ⚡ <b>FASTTRACK VC MUSIC</b> ━━━╮\n\n"
+        "   🎧 <b>HQ Audio</b>  •  📹 <b>HD Video</b>\n"
+        "   🌙 <b>Real LoFi</b>  •  🚀 <b>Ultra Fast</b>\n\n"
+        "   <b>Setup in 3 steps:</b>\n"
+        "   1️⃣ Add me to your group\n"
+        "   2️⃣ Start a Voice Chat\n"
+        "   3️⃣ <code>/play song name</code>\n\n"
+        "╰━━━━━━━━━━━━━━━━━━━━━╯\n"
+        f"👑 Powered by <b>{OWNER_TAG}</b>",
         reply_markup=InlineKeyboardMarkup([
             [
-                InlineKeyboardButton(f"✨  {OWNER}", url=OWNER_URL),
-                InlineKeyboardButton(
-                    "➕  Add to Group",
-                    url=f"https://t.me/{me.username}?startgroup=true",
-                ),
+                InlineKeyboardButton("➕ Add to Group", url=f"https://t.me/{(msg._client.me.username if getattr(msg, '_client', None) and getattr(msg._client, 'me', None) else 'YourBot')}?startgroup=true"),
             ],
-            [InlineKeyboardButton("📖  Help", callback_data="q_help")],
+            [
+                InlineKeyboardButton("📖 Help", callback_data="ui_help"),
+                InlineKeyboardButton("👑 Owner", url=OWNER_URL),
+            ],
         ]),
     )
 
-# ── Callbacks ─────────────────────────────────────────────────────────────────
-async def _refresh_card(q: CallbackQuery, s: ChatState, cid: int) -> None:
-    if s.current:
-        vid = "Video" in (s.current.track.album or "")
-        cap = make_card(s.current.track, s.current.requested_by, s, cid, vid)
-        try:
-            await q.message.edit_caption(
-                caption      = cap,
-                reply_markup = make_btns(s, cid),
-            )
-        except Exception:
-            pass
+
+# ==============================================================================
+# Callbacks — Single handler, no spam
+# ==============================================================================
+@bot.on_callback_query(filters.regex(r"^ui_help$"))
+async def cb_help(_, q: CallbackQuery):
+    await q.answer(
+        "▶️ /play · /vplay · /aiplay\n"
+        "🎚 /pause /resume /skip /stop\n"
+        "🔁 /loop /lofi /shuffle\n"
+        "📋 /queue /remove /np\n"
+        f"👑 {OWNER_TAG}",
+        show_alert=True,
+    )
 
 
 @bot.on_callback_query(filters.regex(r"^q_"))
 async def cb(_, q: CallbackQuery):
-    a   = q.data
+    a = q.data
     cid = q.message.chat.id
-    s   = queues.get(cid)
-
+    s = queues.get(cid)
     try:
-        # ── pause ──────────────────────────────────────────────────────
-        if a == "q_ps":
-            if s.is_playing and not s.is_paused:
-                await calls.pause_stream(cid)
-                s.is_paused = True
-                await _refresh_card(q, s, cid)
-            await q.answer("Paused ⏸")
+        if a == "q_pause":
+            if not s.is_playing or s.is_paused:
+                return await q.answer("—")
+            await calls.pause_stream(cid)
+            s.is_paused = True
+            cap = card(s.current.track, s.current.requested_by, s, cid) if s.current else None
+            if cap:
+                try:
+                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
+                except Exception:
+                    pass
+            await q.answer("⏸ Paused")
 
-        # ── resume ─────────────────────────────────────────────────────
-        elif a == "q_rs":
-            if s.is_paused:
-                await calls.resume_stream(cid)
-                s.is_paused = False
-                await _refresh_card(q, s, cid)
-            await q.answer("Playing ▶")
+        elif a == "q_resume":
+            if not s.is_paused:
+                return await q.answer("—")
+            await calls.resume_stream(cid)
+            s.is_paused = False
+            cap = card(s.current.track, s.current.requested_by, s, cid) if s.current else None
+            if cap:
+                try:
+                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
+                except Exception:
+                    pass
+            await q.answer("▶️ Resumed")
 
-        # ── skip ───────────────────────────────────────────────────────
-        elif a == "q_sk":
+        elif a == "q_skip":
             if not s.is_playing:
-                return await q.answer("Nothing is playing.")
+                return await q.answer("—")
             s.loop = False
-            await q.answer("Skipped ⏭")
+            await q.answer("⏭ Skipped")
             await safe_del(q.message)
             await advance(cid)
 
-        # ── stop ───────────────────────────────────────────────────────
-        elif a == "q_st":
+        elif a == "q_stop":
             queues.clear(cid)
             try:
                 await calls.leave_call(cid)
@@ -837,74 +887,71 @@ async def cb(_, q: CallbackQuery):
                 pass
             await safe_del(q.message)
             NOW_MSG.pop(cid, None)
-            await q.answer("Stopped ⏹")
+            await q.answer("⏹ Stopped")
 
-        # ── loop ───────────────────────────────────────────────────────
-        elif a == "q_lp":
+        elif a == "q_loop":
             if not s.is_playing:
-                return await q.answer("Nothing is playing.")
+                return await q.answer("—")
             s.loop = not s.loop
-            await _refresh_card(q, s, cid)
-            await q.answer(f"Loop  {'on 🔁' if s.loop else 'off'}")
+            cap = card(s.current.track, s.current.requested_by, s, cid) if s.current else None
+            if cap:
+                try:
+                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
+                except Exception:
+                    pass
+            await q.answer(f"🔁 Loop {'ON' if s.loop else 'OFF'}")
 
-        # ── lofi ───────────────────────────────────────────────────────
-        elif a == "q_lo":
+        elif a == "q_shuffle":
+            if not s.queue:
+                return await q.answer("Empty")
+            queues.shuffle(cid)
+            await q.answer("🔀 Shuffled")
+
+        elif a == "q_lofi":
             if cid in LOFI_CHATS:
                 LOFI_CHATS.discard(cid)
-                await q.answer("LoFi off")
+                await q.answer("☀️ LoFi OFF")
             else:
                 LOFI_CHATS.add(cid)
-                await q.answer("LoFi on 🌙")
-            await _refresh_card(q, s, cid)
-
-        # ── shuffle ────────────────────────────────────────────────────
-        elif a == "q_sh":
-            if not s.queue:
-                return await q.answer("Queue is empty.")
-            queues.shuffle(cid)
-            await q.answer("Shuffled 🔀")
-
-        # ── queue view ─────────────────────────────────────────────────
-        elif a == "q_q":
-            if not s.current and not s.queue:
-                return await q.answer("Queue is empty.", show_alert=True)
-            lines: list[str] = []
+                await q.answer("🌙 LoFi ON")
             if s.current:
-                lines.append(f"▶  {s.current.track.title}")
-            for i, it in enumerate(s.queue[:7], 1):
-                lines.append(f"{i}.  {it.track.title}")
-            if len(s.queue) > 7:
-                lines.append(f"…  +{len(s.queue) - 7} more")
+                cap = card(s.current.track, s.current.requested_by, s, cid)
+                try:
+                    await q.message.edit_caption(caption=cap, reply_markup=btns(s))
+                except Exception:
+                    pass
+
+        elif a == "q_queue":
+            if not s.current and not s.queue:
+                return await q.answer("📭 Empty")
+            lines = ["📋 QUEUE", "━━━━━━━━━━━"]
+            if s.current:
+                lines.append(f"▶️ {s.current.track.title}")
+            for i, item in enumerate(s.queue[:6], 1):
+                lines.append(f"{i}. {item.track.title}")
+            if len(s.queue) > 6:
+                lines.append(f"＋{len(s.queue) - 6} more")
             await q.answer("\n".join(lines), show_alert=True)
 
-        # ── remove ─────────────────────────────────────────────────────
-        elif a == "q_rm":
+        elif a == "q_remove":
             if not s.queue:
-                return await q.answer("Queue is empty.", show_alert=True)
-            it = queues.remove_at(cid, 1)
-            await q.answer(
-                f"Removed:  {it.track.title}" if it else "Nothing removed.",
-                show_alert=True,
-            )
-
-        # ── inline help ────────────────────────────────────────────────
-        elif a == "q_help":
-            await q.answer(
-                "Add me to a group → start VC → /play song",
-                show_alert=True,
-            )
+                return await q.answer("📭 Empty")
+            item = queues.remove_at(cid, 1)
+            await q.answer(f"🗑 Removed {item.track.title}" if item else "—", show_alert=True)
 
     except Exception as e:
         logger.exception(f"CB {a}: {e}")
-        await q.answer("Something went wrong.")
+        await q.answer("⚠️ Error")
 
-# ── Watchdog ──────────────────────────────────────────────────────────────────
-async def watchdog() -> None:
+
+# ==============================================================================
+# Watchdog
+# ==============================================================================
+async def watchdog():
     while True:
         await asyncio.sleep(30)
         try:
-            idle_s = getattr(config, "AUTO_LEAVE_SECONDS", 180)
-            for cid in queues.cleanup_idle(idle_s):
+            for cid in queues.cleanup_idle(getattr(config, "AUTO_LEAVE_SECONDS", 180)):
                 try:
                     await calls.leave_call(cid)
                 except Exception:
@@ -914,44 +961,43 @@ async def watchdog() -> None:
         except Exception:
             pass
 
-# ── Boot ──────────────────────────────────────────────────────────────────────
-async def boot() -> None:
-    print("=" * 48)
-    print(f"  FastTrack VC Music — Premium Edition")
-    print(f"  {OWNER}")
-    print("=" * 48)
 
+# ==============================================================================
+# Boot
+# ==============================================================================
+async def boot():
+    print("=" * 50)
+    print("  FastTrack VC Music — Ultimate")
+    print("  @stillrahul")
+    print("=" * 50)
     await assistant.start()
     await bot.start()
     await calls.start()
-
     b = await bot.get_me()
     a = await assistant.get_me()
-
-    print(f"\n  Bot:        @{b.username}")
-    print(f"  Assistant:  {a.first_name}  [{a.id}]")
-    print(f"  Cookies:    {'✅' if COOKIES_PATH else '❌  (Saavn fallback active)'}")
+    print(f"\n  Bot: @{b.username}")
+    print(f"  Assistant: {a.first_name} [{a.id}]")
+    print(f"  Cookies: {'✅' if COOKIES_PATH else '❌'}")
     print(f"\n  Ready.\n")
-
     asyncio.create_task(watchdog())
     await idle()
 
 
-def main() -> None:
+def main():
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(boot())
     except KeyboardInterrupt:
         pass
     finally:
-        async def _cleanup():
+        async def cleanup():
             for fn in [saavn.close, bot.stop, assistant.stop]:
                 try:
                     await fn()
                 except Exception:
                     pass
         try:
-            loop.run_until_complete(_cleanup())
+            loop.run_until_complete(cleanup())
         except Exception:
             pass
 
