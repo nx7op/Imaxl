@@ -13,6 +13,7 @@ import logging
 import os
 import random
 import re
+import unicodedata
 import sys
 import time
 from typing import Optional
@@ -223,15 +224,15 @@ def clean_yt_url(url: str) -> str:
 # YouTube Upgraded Fast Engine
 # ==============================================================================
 class YT:
-    # Cookie-FREE clients first: fast + immune to expired/changed cookies.
-    # Cookie-based strategies are only a last resort, so a bad cookies.txt
-    # can never break or slow down playback again.
+    # Railway/datacenter IPs get "Sign in to confirm you're not a bot" without
+    # cookies, so cookie-backed strategies go FIRST. "formats": ["missing_pot"]
+    # allows formats without a PO token (fixes "Requested format is not available").
     STRATEGIES = [
-        {"name": "android", "args": {"youtube": {"player_client": ["android"]}}, "cookies": False},
-        {"name": "tv_embedded", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "cookies": False},
-        {"name": "ios", "args": {"youtube": {"player_client": ["ios"]}}, "cookies": False},
-        {"name": "mweb_cookies", "args": {"youtube": {"player_client": ["mweb"]}}, "cookies": True},
-        {"name": "default_cookies", "args": {}, "cookies": True},
+        {"name": "tv_cookies", "args": {"youtube": {"player_client": ["tv"], "formats": ["missing_pot"]}}, "cookies": True},
+        {"name": "tv_embedded_cookies", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"], "formats": ["missing_pot"]}}, "cookies": True},
+        {"name": "web_cookies", "args": {"youtube": {"player_client": ["web"], "formats": ["missing_pot"]}}, "cookies": True},
+        {"name": "android", "args": {"youtube": {"player_client": ["android"], "formats": ["missing_pot"]}}, "cookies": False},
+        {"name": "ios", "args": {"youtube": {"player_client": ["ios"], "formats": ["missing_pot"]}}, "cookies": False},
     ]
 
     @classmethod
@@ -276,6 +277,7 @@ class YT:
                         logger.info(f"✅ Successfully extracted via strategy: {strat['name']}")
                         return info
             except Exception as e:
+                logger.warning(f"Strategy {strat['name']} failed: {str(e)[:120]}")
                 continue
         return None
 
@@ -345,14 +347,65 @@ class YT:
 # ==============================================================================
 # Resolver
 # ==============================================================================
-def _relevant(query: str, t: Track) -> bool:
+YT_URL_RE = re.compile(r"(?:youtube\.com/(?:watch\?v=|shorts/|embed/)|youtu\.be/)([\w-]{11})")
+_TITLE_JUNK = re.compile(
+    r"\(.*?\)|\[.*?\]|\|.*|\bft\.?\b.*|\bfeat\.?\b.*|official|video|lyrical|lyrics|full|audio|song|hd|4k|remastered",
+    re.I,
+)
+
+async def yt_oembed_title(url: str) -> Optional[str]:
+    """Cookie-free YouTube title lookup via oEmbed — immune to bot-check/SABR."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=6) as c:
+            r = await c.get(
+                "https://www.youtube.com/oembed",
+                params={"url": url, "format": "json"},
+            )
+            r.raise_for_status()
+            return r.json().get("title") or None
+    except Exception:
+        return None
+
+async def saavn_from_yt_url(url: str) -> Optional[Track]:
+    """Resolve a YouTube link's title (no cookies needed) and play it from Saavn."""
+    title = await yt_oembed_title(url)
+    if not title:
+        return None
+    clean = re.sub(r"\s+", " ", _TITLE_JUNK.sub(" ", title)).strip()[:70]
+    if not clean:
+        return None
+    # YT titles are usually "Artist - Song ft. X" or "Song - Movie | ..." —
+    # try the full cleaned title, then each dash-segment.
+    candidates = [clean]
+    if " - " in clean:
+        parts = [p.strip() for p in clean.split(" - ") if p.strip()]
+        if len(parts) >= 2:
+            candidates.append(f"{parts[1]} {parts[0]}"[:70])
+            candidates.extend(parts[:2])
+    for q in candidates:
+        try:
+            t = await saavn.get_first_result(q)
+            if t and _relevant(clean, t, threshold=0.35):
+                logger.info(f"🔁 YT link → Saavn: {t.title}")
+                return t
+        except Exception:
+            continue
+    return None
+
+def _norm_words(text: str) -> set:
+    """Lowercase, strip accents/diacritics, tokenize."""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+def _relevant(query: str, t: Track, threshold: float = 0.5) -> bool:
     """Loose word-overlap check so Saavn never hijacks unrelated queries."""
-    q = set(re.findall(r"[a-z0-9]+", query.lower()))
+    q = _norm_words(query)
     if not q:
         return False
-    hay = set(re.findall(r"[a-z0-9]+", f"{t.title} {t.artist} {t.album}".lower()))
-    overlap = len(q & hay) / len(q)
-    return overlap >= 0.5
+    hay = _norm_words(f"{t.title} {t.artist} {t.album}")
+    return len(q & hay) / len(q) >= threshold
 
 async def find_track(query: str, video: bool = False) -> Optional[Track]:
     query = query.strip()
@@ -367,6 +420,12 @@ async def find_track(query: str, video: bool = False) -> Optional[Track]:
                 return t
         except Exception:
             pass
+    # YouTube AUDIO links: yt-dlp is blocked on datacenter IPs (bot-check without
+    # cookies, SABR no-URL with cookies) — resolve title via oEmbed, play from Saavn.
+    if is_url and not video and YT_URL_RE.search(query):
+        t = await saavn_from_yt_url(query)
+        if t:
+            return t
     t = await YT.track(query, video)
     if t:
         return t
@@ -474,6 +533,11 @@ async def preload_next(cid: int):
             track.resolved_url = info["url"]
             cache_put(track.url, info["url"])
             logger.info(f"✨ Pre-fetch cached: {track.title}")
+        elif track.source != "yt_video":
+            alt = await saavn.get_first_result(f"{track.title} {track.artist}"[:60])
+            if alt and alt.resolved_url:
+                track.resolved_url = alt.resolved_url
+                logger.info(f"🛟 Pre-fetch Saavn rescue: {track.title}")
     except Exception as e:
         logger.warning(f"❌ Background pre-fetch issue: {e}")
 
@@ -484,9 +548,20 @@ async def start_stream(cid: int, track: Track, video: bool = False):
     if not url:
         logger.info(f"🎯 Resolving live: {track.title}")
         info = await asyncio.to_thread(YT._extract, track.url, video)
-        url = info["url"] if info else track.url
         if info and info.get("url"):
+            url = info["url"]
             cache_put(track.url, url)
+        elif not video:
+            # yt-dlp blocked (bot-check / SABR) — rescue via Saavn by title
+            try:
+                alt = await saavn.get_first_result(f"{track.title} {track.artist}"[:60])
+                if alt and alt.resolved_url:
+                    url = alt.resolved_url
+                    logger.info(f"🛟 Saavn rescue: {track.title}")
+            except Exception:
+                pass
+        if not url:
+            raise Exception("YouTube blocked & no Saavn match — try /play <song name>")
     track.resolved_url = url
 
     if video:

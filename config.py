@@ -34,7 +34,7 @@ API_HASH = _required("API_HASH")
 BOT_TOKEN = _required("BOT_TOKEN")
 SESSION_STRING = _required("SESSION_STRING")
 
-SAAVN_API_BASE = os.environ.get("SAAVN_API_BASE", "https://saavn.sumit.co").rstrip("/")
+SAAVN_API_BASE = os.environ.get("SAAVN_API_BASE", "https://saavn-api.nandanvarma.com").rstrip("/")
 OWNER_USERNAME = os.environ.get("OWNER_USERNAME", "@stillrahul")
 OWNER_ID = _env_int("OWNER_ID", 0)
 SUDO_USERS = {

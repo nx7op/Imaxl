@@ -93,8 +93,12 @@ class Track:
 class SaavnClient:
     """Async JioSaavn client with automatic multi-instance failover."""
 
+    # Verified working instances (tested Jul 2026). saavn.dev is dead (DNS),
+    # sumit.co rate-limits (429) — failover rotates to whichever responds.
     FALLBACK_BASES = [
-        "https://saavn.dev",
+        "https://saavn-api.nandanvarma.com",
+        "https://jiosaavn.funtoonsmultimedia.workers.dev",
+        "https://saavn.sumit.co",
     ]
 
     def __init__(self, base_url: str = SAAVN_API_BASE, timeout: float = HTTP_TIMEOUT):
