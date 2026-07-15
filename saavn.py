@@ -42,9 +42,9 @@ def format_duration(seconds) -> str:
 
 
 class Track:
-    __slots__ = ("id", "title", "artist", "album", "duration", "url", "thumb")
+    __slots__ = ("id", "title", "artist", "album", "duration", "url", "thumb", "source", "resolved_url")
 
-    def __init__(self, id_, title, artist, album, duration, url, thumb):
+    def __init__(self, id_, title, artist, album, duration, url, thumb, source="saavn", resolved_url=None):
         self.id = id_
         self.title = title
         self.artist = artist
@@ -52,6 +52,10 @@ class Track:
         self.duration = duration
         self.url = url
         self.thumb = thumb
+        # "saavn" tracks carry a direct CDN stream URL (no extraction needed).
+        # "yt" / "yt_video" tracks get resolved_url filled by the pre-fetcher.
+        self.source = source
+        self.resolved_url = resolved_url
 
     @property
     def duration_str(self) -> str:
@@ -83,38 +87,47 @@ class Track:
                 thumb = match
                 break
 
-        return cls(song_id, title, artist, album, duration, url, thumb)
+        return cls(song_id, title, artist, album, duration, url, thumb, source="saavn", resolved_url=url)
 
 
 class SaavnClient:
+    """Async JioSaavn client with automatic multi-instance failover."""
+
+    FALLBACK_BASES = [
+        "https://saavn.dev",
+    ]
+
     def __init__(self, base_url: str = SAAVN_API_BASE, timeout: float = HTTP_TIMEOUT):
-        self.base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(timeout=timeout)
+        primary = base_url.rstrip("/")
+        self.bases = [primary] + [b for b in self.FALLBACK_BASES if b != primary]
+        self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
 
     async def close(self):
         await self._client.aclose()
 
-    async def search(self, query: str, limit: int = 10, retries: int = 2) -> list[Track]:
-        url = f"{self.base_url}/api/search/songs"
+    async def search(self, query: str, limit: int = 10) -> list[Track]:
         params = {"query": query, "limit": limit}
-
         last_error = None
-        for attempt in range(retries + 1):
+        for base in self.bases:
             try:
-                resp = await self._client.get(url, params=params)
+                resp = await self._client.get(f"{base}/api/search/songs", params=params)
                 resp.raise_for_status()
                 data = resp.json()
                 if not data.get("success"):
-                    return []
+                    continue
                 songs = data.get("data", {}).get("results", []) or []
                 tracks = [Track.from_api_song(s) for s in songs]
-                return [t for t in tracks if t is not None]
+                found = [t for t in tracks if t is not None]
+                if found:
+                    # Move the working instance to the front for next calls
+                    if base != self.bases[0]:
+                        self.bases.remove(base)
+                        self.bases.insert(0, base)
+                    return found
             except (httpx.HTTPError, ValueError) as e:
                 last_error = e
-                if attempt < retries:
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                    continue
-        logger.warning("Saavn search failed for %r: %s", query, last_error)
+                continue
+        logger.warning("Saavn search failed on all instances for %r: %s", query, last_error)
         return []
 
     async def get_first_result(self, query: str) -> Optional[Track]:

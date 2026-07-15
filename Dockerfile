@@ -15,4 +15,4 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-CMD ["python", "-u", "bot.py"]
+CMD ["python", "-u", "main.py"]

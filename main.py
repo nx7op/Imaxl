@@ -181,6 +181,24 @@ def find_cookies() -> Optional[str]:
 find_cookies()
 
 # ==============================================================================
+# Resolved Stream URL Cache (avoids re-extraction on loop / replay / skip)
+# ==============================================================================
+STREAM_CACHE: dict[str, tuple[str, float]] = {}
+STREAM_CACHE_TTL = 3000  # ~50 min (YT direct links expire in ~6h, stay safe)
+
+def cache_get(key: str) -> Optional[str]:
+    hit = STREAM_CACHE.get(key)
+    if hit and (time.time() - hit[1]) < STREAM_CACHE_TTL:
+        return hit[0]
+    STREAM_CACHE.pop(key, None)
+    return None
+
+def cache_put(key: str, url: str):
+    if len(STREAM_CACHE) > 300:
+        STREAM_CACHE.clear()
+    STREAM_CACHE[key] = (url, time.time())
+
+# ==============================================================================
 # YouTube URL Cleaner
 # ==============================================================================
 def clean_yt_url(url: str) -> str:
@@ -205,12 +223,15 @@ def clean_yt_url(url: str) -> str:
 # YouTube Upgraded Fast Engine
 # ==============================================================================
 class YT:
+    # Cookie-FREE clients first: fast + immune to expired/changed cookies.
+    # Cookie-based strategies are only a last resort, so a bad cookies.txt
+    # can never break or slow down playback again.
     STRATEGIES = [
-        {"name": "tv_embedded", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "cookies": True},
-        {"name": "web_creator", "args": {"youtube": {"player_client": ["web_creator"]}}, "cookies": True},
-        {"name": "mweb", "args": {"youtube": {"player_client": ["mweb"]}}, "cookies": True},
-        {"name": "default", "args": {}, "cookies": False},
         {"name": "android", "args": {"youtube": {"player_client": ["android"]}}, "cookies": False},
+        {"name": "tv_embedded", "args": {"youtube": {"player_client": ["tv_embedded"], "player_skip": ["webpage", "js"]}}, "cookies": False},
+        {"name": "ios", "args": {"youtube": {"player_client": ["ios"]}}, "cookies": False},
+        {"name": "mweb_cookies", "args": {"youtube": {"player_client": ["mweb"]}}, "cookies": True},
+        {"name": "default_cookies", "args": {}, "cookies": True},
     ]
 
     @classmethod
@@ -223,8 +244,8 @@ class YT:
             "nocheckcertificate": True,
             "geo_bypass": True,
             "noplaylist": True,
-            "socket_timeout": 12,
-            "retries": 2,
+            "socket_timeout": 8,
+            "retries": 1,
             "cachedir": False,
             "source_address": "0.0.0.0",
             "http_headers": {
@@ -302,6 +323,7 @@ class YT:
                 duration=dur,
                 url=fallback_url,
                 thumb=thumb,
+                source="yt_video" if video else "yt",
             )
         except Exception as e:
             logger.warning(f"⚠️ Flat search missed, switching to fallback extraction: {e}")
@@ -316,14 +338,35 @@ class YT:
                 duration=int(info.get("duration") or 0),
                 url=info["url"],
                 thumb=DEFAULT_THUMB,
+                source="yt_video" if video else "yt",
+                resolved_url=info["url"],
             )
 
 # ==============================================================================
 # Resolver
 # ==============================================================================
+def _relevant(query: str, t: Track) -> bool:
+    """Loose word-overlap check so Saavn never hijacks unrelated queries."""
+    q = set(re.findall(r"[a-z0-9]+", query.lower()))
+    if not q:
+        return False
+    hay = set(re.findall(r"[a-z0-9]+", f"{t.title} {t.artist} {t.album}".lower()))
+    overlap = len(q & hay) / len(q)
+    return overlap >= 0.5
+
 async def find_track(query: str, video: bool = False) -> Optional[Track]:
     query = query.strip()
     is_url = query.startswith("http")
+    # Saavn first for plain text audio queries: direct 320kbps CDN link,
+    # no yt-dlp extraction, no cookies — plays instantly.
+    if not is_url and not video:
+        try:
+            t = await saavn.get_first_result(query)
+            if t and _relevant(query, t):
+                logger.info(f"⚡ Saavn instant → {t.title}")
+                return t
+        except Exception:
+            pass
     t = await YT.track(query, video)
     if t:
         return t
@@ -331,7 +374,7 @@ async def find_track(query: str, video: bool = False) -> Optional[Track]:
         try:
             t = await saavn.get_first_result(query)
             if t:
-                logger.info(f"✅ Saavn → {t.title}")
+                logger.info(f"✅ Saavn fallback → {t.title}")
                 return t
         except Exception:
             pass
@@ -360,7 +403,7 @@ def _bar() -> str:
 def card(track: Track, by: str, state: ChatState, cid: int, is_video: bool = False) -> str:
     dur = getattr(track, "duration_str", None) or f"{track.duration}s"
     src = "📹 Video · HD" if is_video else (
-        "🎵 JioSaavn · HQ" if "Saavn" in (track.album or "") else "🎧 YouTube · HQ"
+        "🎵 JioSaavn · 320kbps" if getattr(track, "source", "") == "saavn" else "🎧 YouTube · HQ"
     )
     lofi_on = cid in LOFI_CHATS
     q = len(state.queue)
@@ -413,30 +456,38 @@ async def preload_next(cid: int):
         return
     
     next_item = state.queue[0]
-    if hasattr(next_item.track, "resolved_url") and next_item.track.resolved_url:
-        return  # Already preloaded
-        
+    track = next_item.track
+    if track.resolved_url:
+        return  # Saavn direct link or already preloaded
+    cached = cache_get(track.url)
+    if cached:
+        track.resolved_url = cached
+        return
+
     def _preload_worker():
-        is_video = "Video" in (next_item.track.album or "")
-        return YT._extract(next_item.track.url, is_video)
+        return YT._extract(track.url, track.source == "yt_video")
 
     try:
-        logger.info(f"⏳ Pre-fetching stream URL in background for: {next_item.track.title}")
+        logger.info(f"⏳ Pre-fetching stream URL in background for: {track.title}")
         info = await asyncio.to_thread(_preload_worker)
         if info and info.get("url"):
-            next_item.track.resolved_url = info["url"]
-            logger.info(f"✨ Pre-fetch successfully cached for: {next_item.track.title}")
+            track.resolved_url = info["url"]
+            cache_put(track.url, info["url"])
+            logger.info(f"✨ Pre-fetch cached: {track.title}")
     except Exception as e:
-        logger.warning(f"❌ Background pre-fetch encountered an issue: {e}")
+        logger.warning(f"❌ Background pre-fetch issue: {e}")
 
 async def start_stream(cid: int, track: Track, video: bool = False):
-    # Consume pre-fetched stream link if available, else fetch live instantly
-    url = getattr(track, "resolved_url", None)
-    
+    # Consume pre-fetched / cached stream link if available, else fetch live
+    url = track.resolved_url or cache_get(track.url)
+
     if not url:
-        logger.info(f"🎯 Direct link missing from cache, resolving live fallback: {track.title}")
+        logger.info(f"🎯 Resolving live: {track.title}")
         info = await asyncio.to_thread(YT._extract, track.url, video)
         url = info["url"] if info else track.url
+        if info and info.get("url"):
+            cache_put(track.url, url)
+    track.resolved_url = url
 
     if video:
         await calls.play(
@@ -492,7 +543,7 @@ async def advance(cid: int):
         NOW_MSG.pop(cid, None)
         return
     try:
-        is_video = "Video" in (nxt.track.album or "")
+        is_video = nxt.track.source == "yt_video"
         await start_stream(cid, nxt.track, is_video)
         await send_card(cid, queues.get(cid), is_video)
         
@@ -507,7 +558,7 @@ async def advance(cid: int):
 @calls.on_update()
 async def on_end(_, update):
     cid = getattr(update, "chat_id", None)
-    if type(update).name in {"StreamEnded", "StreamEndedUpdate", "UpdatedStreamEnded"} and cid:
+    if type(update).__name__ in {"StreamEnded", "StreamEndedUpdate", "UpdatedStreamEnded"} and cid:
         await advance(cid)
 
 # ==============================================================================
@@ -563,7 +614,7 @@ async def _play(cid: int, query: str, by: str, msg: Message, video: bool = False
             queues.clear(cid)
             await safe_edit(
                 status,
-                "❌ <b>Error</b>\n<code>{str(e)[:150]}</code>",
+                f"❌ <b>Error</b>\n<code>{str(e)[:150]}</code>",
                 owner_kb(),
             )
             await asyncio.sleep(4)
@@ -692,7 +743,7 @@ async def cmd_lofi(_, msg: Message):
     s = queues.get(cid)
     if s.current:
         try:
-            is_video = "Video" in (s.current.track.album or "")
+            is_video = s.current.track.source == "yt_video"
             await start_stream(cid, s.current.track, is_video)
             await send_card(cid, s, is_video)
         except Exception:
